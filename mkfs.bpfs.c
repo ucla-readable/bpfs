@@ -30,6 +30,7 @@ static void mkfs(void)
 	struct bpfs_inode *inodes;
 	struct bpfs_inode *root_inode;
 	struct bpfs_dirent *root_dirent;
+	time_t now;
 
 	if (bpram_size < BPFS_MIN_NBYTES)
 	{
@@ -37,6 +38,8 @@ static void mkfs(void)
 		        BPFS_MIN_NBYTES);
 		exit(1);
 	}
+
+	time(&now);
 
 	super = (struct bpfs_super*) bpram;
 	super->magic = BPFS_FS_MAGIC;
@@ -61,8 +64,8 @@ static void mkfs(void)
 	root_inode->nbytes = BPFS_BLOCK_SIZE;
 	root_inode->nblocks = 1;
 	root_inode->tree_height = 1;
-	static_assert(sizeof(root_inode->atime.sec) == sizeof(time_t));
-	time((time_t*) &root_inode->atime.sec);
+	root_inode->atime.sec = (typeof(root_inode->atime.sec)) now;
+	xtest(root_inode->atime.sec != now);
 	root_inode->mtime = root_inode->ctime = root_inode->atime;
 	// TODO: flags
 	root_inode->block_addr = super->inode_addr + super->ninodeblocks;
@@ -90,8 +93,7 @@ static void mkfs(void)
 		test_inode->nbytes = 4096;
 		test_inode->nblocks = 1;
 		test_inode->tree_height = 1;
-		static_assert(sizeof(test_inode->atime.sec) == sizeof(time_t));
-		time((time_t*) &test_inode->atime.sec);
+		test_inode->atime.sec = (typeof(test_inode->atime.sec)) now;
 		test_inode->mtime = test_inode->ctime = test_inode->atime;
 		// TODO: flags
 		test_inode->block_addr = root_inode->block_addr + 1;
