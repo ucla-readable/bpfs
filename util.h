@@ -7,11 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-// if cond is true, display message and then exit
-#define xtest(cond) \
-	if (cond) \
+// if cond is false, display message and then exit
+#define xassert(cond) \
+	if (!(cond)) \
 	{ \
-		fprintf(stderr, "True, but should not be: %s\n", # cond); \
+		fprintf(stderr, "Not true, but should be: %s\n", # cond); \
 		assert(0); \
 		exit(1); \
 	}
@@ -23,6 +23,20 @@
 		if (err < 0)	\
 		{ \
 			int err = errno; \
+			fprintf(stderr, "%s: %s\n", # call, strerror(err));	\
+			assert(0); \
+			exit(1); \
+		} \
+		err; \
+	})
+
+// if function call exp call returns < 0, display message and value and
+// then exit
+#define xcall(call, format...) \
+	({ \
+		int err = call; \
+		if (err < 0)	\
+		{ \
 			fprintf(stderr, "%s: %s\n", # call, strerror(err));	\
 			assert(0); \
 			exit(1); \
@@ -49,9 +63,12 @@
 		__a >= __b ? __a : __b; \
 	})
 
-// 32-bit integer rounding; only works for n = power of two
-#define ROUNDUP32(a, n)     \
-    ({ uint32_t __n = (n);  (((uint32_t) (a) + __n - 1) & ~(__n - 1)); })
-#define ROUNDDOWN32(a, n)   (((uint32_t) (a)) & ~((n) - 1))
+// 64-bit integer rounding; only works for n = power of two
+#define ROUNDUP64(a, n) \
+    ({ uint64_t __n = (n);  (((uint64_t) (a) + __n - 1) & ~(__n - 1)); })
+#define ROUNDDOWN64(a, n)   (((uint64_t) (a)) & ~((n) - 1))
+
+#define BPFS_DIRENT_LEN(name_len) \
+	ROUNDUP64(sizeof(struct bpfs_dirent) + (name_len), BPFS_DIRENT_ALIGN)
 
 #endif

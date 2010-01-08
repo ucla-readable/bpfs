@@ -76,7 +76,6 @@ struct bpfs_inode
 	uint32_t nlinks;
 	uint64_t nbytes;
 	uint64_t nblocks;
-	uint64_t tree_height;
 	struct bpfs_time atime;
 	struct bpfs_time ctime;
 	struct bpfs_time mtime;
@@ -90,14 +89,18 @@ struct bpfs_dirent
 	uint16_t rec_len;
 	uint8_t file_type;
 	uint8_t name_len;
-	char name[BPFS_NAME_LEN];
+	char name[];
 };
 
-#define BPFS_DIRENT_LEN (sizeof(struct bpfs_dirent) - BPFS_NAME_LEN)
+#define BPFS_DIRENT_ALIGN 8
+#define BPFS_DIRENT_MAX_NAME_LEN (BPFS_BLOCK_SIZE - sizeof(struct bpfs_dirent) - 1)
 
 struct bpfs_indir_block
 {
 	uint64_t addr[BPFS_BLOCK_SIZE / sizeof(uint64_t)];
 };
+
+
+#define BPFS_INODES_PER_BLOCK (BPFS_BLOCK_SIZE / sizeof(struct bpfs_inode))
 
 #endif
