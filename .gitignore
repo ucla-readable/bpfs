@@ -1,5 +1,6 @@
 bpfs
 mkfs.bpfs
+*.o
 tags
 TAGS
 bpram

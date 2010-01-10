@@ -1,3 +1,4 @@
+#include "mkbpfs.h"
 #include "bpfs_structs.h"
 #include "util.h"
 
@@ -563,6 +564,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 
 static void fuse_init(void *userdata, struct fuse_conn_info *conn)
 {
+	static_assert(FUSE_ROOT_ID == BPFS_INO_ROOT);
 	Dprintf("%s()\n", __FUNCTION__);
 }
 
@@ -1201,23 +1203,19 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 #undef ADD_FUSE_CALLBACK
 }
 
-int main(int argc, char **argv)
+
+//
+// persistent bpram
+
+static int bpram_fd = -1;
+
+static void init_persistent_bpram(const char *filename)
 {
-	struct fuse_args fargs = FUSE_ARGS_INIT(argc, argv);
-	struct fuse_lowlevel_ops fuse_ops;
-	struct fuse_session *se;
-	struct fuse_chan *ch;
-	char *mountpoint;
 	struct stat stbuf;
-	int bpram_fd;
-	int r = -1;
-#if RETURN_WD
-	char cwd[PATH_MAX];
-#endif
 
-	static_assert(FUSE_ROOT_ID == BPFS_INO_ROOT);
+	assert(!bpram && !bpram_size);
 
-	bpram_fd = xsyscall(open("bpram", O_RDWR));
+	bpram_fd = xsyscall(open(filename, O_RDWR));
 
 	xsyscall(fstat(bpram_fd, &stbuf));
 	bpram_size = stbuf.st_size;
@@ -1225,6 +1223,68 @@ int main(int argc, char **argv)
 
 	bpram = mmap(NULL, bpram_size, PROT_READ | PROT_WRITE, MAP_SHARED, bpram_fd, 0);
 	xassert(bpram);
+}
+
+static void destroy_persistent_bpram(void)
+{
+	xsyscall(msync(bpram, bpram_size, MS_SYNC));
+	xsyscall(munmap(bpram, bpram_size));
+	bpram = NULL;
+	bpram_size = 0;
+	xsyscall(close(bpram_fd));
+	bpram_fd = -1;
+}
+
+
+//
+// ephemeral bpram
+
+static void init_ephemeral_bpram(size_t size)
+{
+	assert(!bpram && !bpram_size);
+	bpram = malloc(size);
+	xassert(bpram);
+	bpram_size = size;
+	xcall(mkbpfs(bpram, bpram_size));
+}
+
+static void destroy_ephemeral_bpram(void)
+{
+	free(bpram);
+	bpram = NULL;
+	bpram_size = 0;
+}
+
+
+//
+// main
+
+int main(int argc, char **argv)
+{
+	void (*destroy_bpram)(void);
+	int r = -1;
+
+	if (argc < 3)
+	{
+		fprintf(stderr, "%s: <-f FILE|-s SIZE> [FUSE...]\n", argv[0]);
+		exit(1);
+	}
+
+	if (!strcmp(argv[1], "-f"))
+	{
+		init_persistent_bpram(argv[2]);
+		destroy_bpram = destroy_persistent_bpram;
+	}
+	else if (!strcmp(argv[1], "-s"))
+	{
+		init_ephemeral_bpram(strtol(argv[2], NULL, 0));
+		destroy_bpram = destroy_ephemeral_bpram;
+	}
+	else
+	{
+		fprintf(stderr, "Invalid argument \"%s\"\n", argv[1]);
+		exit(1);
+	}
 
 	super = (struct bpfs_super*) bpram;
 
@@ -1241,34 +1301,44 @@ int main(int argc, char **argv)
 
 	xcall(init_allocations());
 
-	init_fuse_ops(&fuse_ops);
+	memmove(argv + 1, argv + 3, (argc - 2) * sizeof(*argv));
+	argc -= 2;
 
-	xcall(fuse_parse_cmdline(&fargs, &mountpoint, NULL, NULL));
-	xassert((ch = fuse_mount(mountpoint, &fargs)));
-
-	se = fuse_lowlevel_new(&fargs, &fuse_ops, sizeof(fuse_ops), NULL);
-	if (se)
 	{
-		if (fuse_set_signal_handlers(se) != -1)
+		struct fuse_args fargs = FUSE_ARGS_INIT(argc, argv);
+		struct fuse_lowlevel_ops fuse_ops;
+		struct fuse_session *se;
+		struct fuse_chan *ch;
+		char *mountpoint;
+
+		init_fuse_ops(&fuse_ops);
+
+		xcall(fuse_parse_cmdline(&fargs, &mountpoint, NULL, NULL));
+		xassert((ch = fuse_mount(mountpoint, &fargs)));
+
+		se = fuse_lowlevel_new(&fargs, &fuse_ops, sizeof(fuse_ops), NULL);
+		if (se)
 		{
-			fuse_session_add_chan(se, ch);
+			if (fuse_set_signal_handlers(se) != -1)
+			{
+				fuse_session_add_chan(se, ch);
 
-			r = fuse_session_loop(se);
+				r = fuse_session_loop(se);
 
-			fuse_remove_signal_handlers(se);
-			fuse_session_remove_chan(ch);
+				fuse_remove_signal_handlers(se);
+				fuse_session_remove_chan(ch);
+			}
+			fuse_session_destroy(se);
 		}
-		fuse_session_destroy(se);
-	}
 
-	fuse_unmount(mountpoint, ch);
-	fuse_opt_free_args(&fargs);
+		fuse_unmount(mountpoint, ch);
+		free(mountpoint);
+		fuse_opt_free_args(&fargs);
+	}
 
 	destroy_allocations();
 
-	xsyscall(msync(bpram, bpram_size, MS_SYNC));
-	xsyscall(munmap(bpram, bpram_size));
-	xsyscall(close(bpram_fd));
+	destroy_bpram();
 
 	return r;
 }
