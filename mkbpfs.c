@@ -36,7 +36,6 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	static_assert(sizeof(uuid_t) == sizeof(super->uuid));
 	uuid_generate(super->uuid);
 	super->nblocks = bpram_size / BPFS_BLOCK_SIZE;
-	super->bitmap_addr = BPFS_BLOCKNO_INVALID;
 	super->inode_addr = 2;
 	super->ninodeblocks = 1;
 
@@ -51,15 +50,16 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	root_inode->uid = 0;
 	root_inode->gid = 0;
 	root_inode->nlinks = 2;
-	root_inode->nbytes = BPFS_BLOCK_SIZE;
-	root_inode->nblocks = 1;
+	root_inode->root.height = 0;
+	root_inode->root.nbytes = BPFS_BLOCK_SIZE;
+	root_inode->root.nblocks = 1;
 	root_inode->atime.sec = (typeof(root_inode->atime.sec)) now;
 	xassert(root_inode->atime.sec == now);
 	root_inode->mtime = root_inode->ctime = root_inode->atime;
 	// TODO: flags
-	root_inode->block_addr = super->inode_addr + super->ninodeblocks;
+	root_inode->root.addr = super->inode_addr + super->ninodeblocks;
 
-	root_dirent = (struct bpfs_dirent*) GET_BLOCK(root_inode->block_addr);
+	root_dirent = (struct bpfs_dirent*) GET_BLOCK(root_inode->root.addr);
 	static_assert(BPFS_INO_INVALID == 0);
 	memset(root_dirent, 0, BPFS_BLOCK_SIZE);
 	root_dirent->ino = BPFS_INO_ROOT;

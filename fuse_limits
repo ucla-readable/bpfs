@@ -1,0 +1,4 @@
+- fuse_reply_buf() can only be called once per read/readdir.
+  fuse_reply_iov() exists, but requires allocating an array to track the ptrs.
+- file creation is done in two calls (create and setattr), so not atomic
+- are write calls limited to 4kiB?

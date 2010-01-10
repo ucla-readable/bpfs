@@ -12,8 +12,6 @@
 #define BPFS_INO_INVALID 0
 #define BPFS_INO_ROOT    1
 
-#define BPFS_NAME_LEN 255 // Maximum size of a path component, including null
-
 #define BPFS_S_IFMT   0xF000
 #define BPFS_S_IFSOCK 0xC000
 #define BPFS_S_IFLNK  0xA000
@@ -56,10 +54,31 @@ struct bpfs_super
 	uint32_t version;
 	uint8_t  uuid[16];
 	uint64_t nblocks;
-	uint64_t bitmap_addr; // use?
+//	struct bpfs_tree_root inode_root; // TODO
 	uint64_t inode_addr; // just the second block?
 	uint64_t ninodeblocks;
 };
+
+
+#define BPFS_TREE_MAX_HEIGHT 5
+#define BPFS_TREE_ROOT_MAX_ADDR (1 << (sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT))
+
+struct bpfs_tree_root
+{
+	uint64_t height; // : BPFS_TREE_MAX_HEIGHT; // #levels of indir blocks
+	uint64_t addr; // : sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT;
+	uint64_t nbytes;
+	uint64_t nblocks; // TODO: remove, to update size atomically and in-place
+};
+
+
+#define BPFS_BLOCKNOS_PER_INDIR (BPFS_BLOCK_SIZE / sizeof(uint64_t))
+
+struct bpfs_indir_block
+{
+	uint64_t addr[BPFS_BLOCKNOS_PER_INDIR];
+};
+
 
 struct bpfs_time
 {
@@ -74,14 +93,15 @@ struct bpfs_inode
 	uint32_t uid;
 	uint32_t gid;
 	uint32_t nlinks;
-	uint64_t nbytes;
-	uint64_t nblocks;
 	struct bpfs_time atime;
 	struct bpfs_time ctime;
 	struct bpfs_time mtime;
 	uint64_t flags;
-	uint64_t block_addr;
+	struct bpfs_tree_root root;
 };
+
+#define BPFS_INODES_PER_BLOCK (BPFS_BLOCK_SIZE / sizeof(struct bpfs_inode))
+
 
 struct bpfs_dirent
 {
@@ -94,13 +114,5 @@ struct bpfs_dirent
 
 #define BPFS_DIRENT_ALIGN 8
 #define BPFS_DIRENT_MAX_NAME_LEN (BPFS_BLOCK_SIZE - sizeof(struct bpfs_dirent) - 1)
-
-struct bpfs_indir_block
-{
-	uint64_t addr[BPFS_BLOCK_SIZE / sizeof(uint64_t)];
-};
-
-
-#define BPFS_INODES_PER_BLOCK (BPFS_BLOCK_SIZE / sizeof(struct bpfs_inode))
 
 #endif
