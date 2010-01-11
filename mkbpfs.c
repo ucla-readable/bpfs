@@ -24,6 +24,7 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	struct bpfs_inode *root_inode;
 	struct bpfs_dirent *root_dirent;
 	time_t now;
+	int i;
 
 	if (bpram_size < BPFS_MIN_NBYTES)
 		return -ENOSPC;
@@ -36,12 +37,19 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	static_assert(sizeof(uuid_t) == sizeof(super->uuid));
 	uuid_generate(super->uuid);
 	super->nblocks = bpram_size / BPFS_BLOCK_SIZE;
-	super->inode_addr = 2;
-	super->ninodeblocks = 1;
+	super->inode_root.addr = 2;
+	super->inode_root.height = 0;
+	super->inode_root.nblocks = 1;
+	super->inode_root.nbytes = super->inode_root.nblocks * BPFS_BLOCK_SIZE;
 
-	inodes = (struct bpfs_inode*) GET_BLOCK(super->inode_addr);
+	inodes = (struct bpfs_inode*) GET_BLOCK(super->inode_root.addr);
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
-	memset(inodes, 0, super->ninodeblocks * BPFS_BLOCK_SIZE);
+#ifndef NDEBUG
+	// init the generation field. not required, but appeases valgrind.
+	for (i = 0; i + sizeof(struct bpfs_inode) <= BPFS_BLOCK_SIZE; i += sizeof(struct bpfs_inode))
+		inodes[i].generation = 0;
+#endif
+	memset(inodes, 0, super->inode_root.nblocks * BPFS_BLOCK_SIZE);
 
 	root_inode = &inodes[0];
 	root_inode->generation = 1;
@@ -57,7 +65,7 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	xassert(root_inode->atime.sec == now);
 	root_inode->mtime = root_inode->ctime = root_inode->atime;
 	// TODO: flags
-	root_inode->root.addr = super->inode_addr + super->ninodeblocks;
+	root_inode->root.addr = super->inode_root.addr + super->inode_root.nblocks;
 
 	root_dirent = (struct bpfs_dirent*) GET_BLOCK(root_inode->root.addr);
 	static_assert(BPFS_INO_INVALID == 0);

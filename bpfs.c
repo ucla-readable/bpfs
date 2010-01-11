@@ -49,6 +49,21 @@ static struct bpfs_super *super;
 
 
 //
+// crawler forward declarations
+
+typedef int (*crawl_callback)(uint64_t blockoff, char *block,
+                              unsigned off, unsigned size, unsigned valid,
+                              uint64_t crawl_start, bool_t may_commit,
+                              void *user, uint64_t *blockno);
+
+typedef void (*crawl_blockno_callback)(uint64_t blockno);
+
+static int crawl(struct bpfs_tree_root *root, bool_t may_commit,
+                 uint64_t off, uint64_t size,
+                 crawl_callback callback, void *user);
+
+
+//
 // BPFS-FUSE type conversion
 
 static mode_t b2f_filetype(uint32_t bpfs_file_type)
@@ -160,7 +175,8 @@ struct bitmap {
 
 static int bitmap_init(struct bitmap *bitmap, uint64_t ntotal)
 {
-	size_t size = ROUNDUP64(ntotal, 8) / 8;
+	size_t size = ntotal / 8;
+	assert(!(ntotal % 8)); // simplifies resize
 	assert(!bitmap->bitmap);
 	bitmap->bitmap = malloc(size);
 	if (!bitmap->bitmap)
@@ -174,6 +190,35 @@ static void bitmap_destroy(struct bitmap *bitmap)
 {
 	free(bitmap->bitmap);
 	bitmap->bitmap = NULL;
+}
+
+static int bitmap_resize(struct bitmap *bitmap, uint64_t ntotal)
+{
+	char *new_bitmap;
+
+	if (bitmap->ntotal == ntotal)
+		return 0;
+
+	new_bitmap = realloc(bitmap->bitmap, ntotal);
+	if (!new_bitmap)
+		return -ENOMEM;
+	bitmap->bitmap = new_bitmap;
+
+	if (bitmap->ntotal < ntotal)
+	{
+		uint64_t delta = ntotal - bitmap->ntotal;
+		memset(bitmap->bitmap + bitmap->ntotal / 8, 0, delta / 8);
+		bitmap->nfree += delta;
+		bitmap->ntotal = ntotal;
+	}
+	else
+	{
+		// TODO
+		// might want to check that no dropped items are allocated
+		xassert(0);
+	}
+
+	return 0;
 }
 
 static uint64_t bitmap_alloc(struct bitmap *bitmap)
@@ -280,7 +325,10 @@ static struct bitmap inode_bitmap;
 
 static int init_inode_allocations(void)
 {
-	return bitmap_init(&inode_bitmap, super->ninodeblocks * BPFS_INODES_PER_BLOCK);
+	// This code assumes that inodes are contiguous in the inode tree
+	static_assert(!(BPFS_BLOCK_SIZE % sizeof(struct bpfs_inode)));
+
+	return bitmap_init(&inode_bitmap, super->inode_root.nblocks * BPFS_INODES_PER_BLOCK);
 }
 
 static void destroy_inode_allocations(void)
@@ -288,11 +336,35 @@ static void destroy_inode_allocations(void)
 	bitmap_destroy(&inode_bitmap);
 }
 
+static int callback_init_inode(uint64_t blockoff, char *block,
+                               unsigned off, unsigned size, unsigned valid,
+                               uint64_t crawl_start, bool_t may_commit,
+                               void *user, uint64_t *blockno)
+{
+#ifndef NDEBUG
+	// init the generation field. not required, but appeases valgrind.
+	assert(!(off % sizeof(struct bpfs_inode)));
+	for (; off + sizeof(struct bpfs_inode) <= size; off += sizeof(struct bpfs_inode))
+	{
+		struct bpfs_inode *inode = (struct bpfs_inode*) (block + off);
+		inode->generation = 0;
+	}
+#endif
+	return 0;
+}
+
 static uint64_t alloc_inode(void)
 {
 	uint64_t no = bitmap_alloc(&inode_bitmap);
 	if (no == inode_bitmap.ntotal)
-		return BPFS_INO_INVALID;
+	{
+		if (crawl(&super->inode_root, 1, super->inode_root.nbytes,
+		          super->inode_root.nbytes, callback_init_inode, NULL) < 0)
+			return BPFS_INO_INVALID;
+		xcall(bitmap_resize(&inode_bitmap, super->inode_root.nbytes / sizeof(struct bpfs_inode)));
+		no = bitmap_alloc(&inode_bitmap);
+		assert(no != inode_bitmap.ntotal);
+	}
 	static_assert(BPFS_INO_INVALID == 0);
 	return no + 1;
 }
@@ -311,10 +383,22 @@ static void free_inode(uint64_t ino)
 	bitmap_free(&inode_bitmap, ino - 1);
 }
 
+static int callback_get_inode(uint64_t blockoff, char *block,
+                              unsigned off, unsigned size, unsigned valid,
+                              uint64_t crawl_start, bool_t may_commit,
+                              void *user, uint64_t *blockno)
+{
+	struct bpfs_inode **inode = user;
+	assert(size == sizeof(**inode));
+	*inode = (struct bpfs_inode*) (block + off);
+	return 0;
+}
+
 static struct bpfs_inode* get_inode(uint64_t ino)
 {
 	uint64_t no;
-	struct bpfs_inode *inodes;
+	struct bpfs_inode *inode;
+
 	if (ino == BPFS_INO_INVALID)
 	{
 		assert(0);
@@ -327,8 +411,10 @@ static struct bpfs_inode* get_inode(uint64_t ino)
 		assert(0);
 		return NULL;
 	}
-	inodes = (struct bpfs_inode*) get_block(super->inode_addr);
-	return &inodes[no];
+
+	xcall(crawl(&super->inode_root, 0, no * sizeof(*inode), sizeof(*inode),
+	            callback_get_inode, &inode));
+	return inode;
 }
 
 //
@@ -387,13 +473,6 @@ static void tree_change_height(struct bpfs_tree_root *root, unsigned height_new)
 	}
 }
 
-typedef int (*crawl_callback)(uint64_t blockoff, char *block,
-                              unsigned off, unsigned size, unsigned valid,
-                              uint64_t crawl_start, bool_t may_commit,
-                              void *user, uint64_t *blockno);
-
-typedef void (*crawl_blockno_callback)(uint64_t blockno);
-
 static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
                       unsigned off, unsigned size, unsigned valid,
                       uint64_t crawl_start, bool_t may_commit,
@@ -422,7 +501,7 @@ static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
 		             user, &child_blockno);
 		if (r >= 0 && (!valid || prev_blockno != child_blockno))
 		{
-			xassert(may_commit);
+			//xassert(may_commit);
 			*new_blockno = child_blockno;
 		}
 	}
@@ -593,10 +672,10 @@ static int crawl(struct bpfs_tree_root *root, bool_t may_commit,
 //
 // block and inode allocation discovery
 
-static void discover_indir_block_allocations(struct bpfs_indir_block *indir,
-                                             unsigned height,
-                                             uint64_t max_nblocks,
-                                             uint64_t valid)
+static void discover_indir_allocations(struct bpfs_indir_block *indir,
+                                       unsigned height,
+                                       uint64_t max_nblocks,
+                                       uint64_t valid)
 {
 	uint64_t child_max_nblocks = max_nblocks / BPFS_BLOCKNOS_PER_INDIR;
 	uint64_t child_max_nbytes = child_max_nblocks * BPFS_BLOCK_SIZE;
@@ -613,33 +692,34 @@ static void discover_indir_block_allocations(struct bpfs_indir_block *indir,
 				child_valid = child_max_nbytes;
 			else
 				child_valid = valid % child_max_nbytes;
-			discover_indir_block_allocations(child_indir, height - 1,
-			                                 child_max_nblocks, child_valid);
+			discover_indir_allocations(child_indir, height - 1,
+			                           child_max_nblocks, child_valid);
 		}
 	}
 }
 
-static void discover_allocations(uint64_t ino)
+static void discover_tree_allocations(struct bpfs_tree_root *root)
 {
-	struct bpfs_inode *inode = get_inode(ino);
-	static_assert(BPFS_INO_INVALID == 0);
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
-	xassert(inode);
-
-	xassert(ino <= inode_bitmap.ntotal);
-	set_inode(ino);
-
-	if (inode->root.nbytes)
+	if (root->nbytes)
 	{
-		set_block(inode->root.addr);
-		if (inode->root.height)
+		set_block(root->addr);
+		if (root->height)
 		{
-			struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(inode->root.addr);
-			uint64_t max_nblocks = tree_max_nblocks(inode->root.height);
-			discover_indir_block_allocations(indir, inode->root.height,
-			                                 max_nblocks, inode->root.nbytes);
+			struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root->addr);
+			uint64_t max_nblocks = tree_max_nblocks(root->height);
+			discover_indir_allocations(indir, root->height, max_nblocks,
+			                           root->nbytes);
 		}
 	}
+}
+
+static void discover_inode_allocations(uint64_t ino)
+{
+	struct bpfs_inode *inode = get_inode(ino);
+
+	set_inode(ino);
+
+	discover_tree_allocations(&inode->root);
 
 	// TODO: combine the inode and block discovery loops?
 	if (inode->mode & BPFS_S_IFDIR)
@@ -658,21 +738,18 @@ static void discover_allocations(uint64_t ino)
 				continue;
 			if (!strcmp(dirent->name, ".."))
 				continue;
-			xassert(dirent->ino <= block_bitmap.ntotal);
-			discover_allocations(dirent->ino);
+			discover_inode_allocations(dirent->ino);
 		}
 	}
 }
 
 static int init_allocations(void)
 {
-	uint64_t i;
 	xcall(init_block_allocations());
 	xcall(init_inode_allocations());
 	set_block(1); // superblock
-	for (i = 0; i < super->ninodeblocks; i++)
-		set_block(super->inode_addr + i);
-	discover_allocations(BPFS_INO_ROOT);
+	discover_tree_allocations(&super->inode_root);
+	discover_inode_allocations(BPFS_INO_ROOT);
 	return 0;
 }
 

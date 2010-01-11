@@ -48,18 +48,6 @@
 #define BPFS_TYPE_SYMLINK 7
 
 
-struct bpfs_super
-{
-	uint32_t magic;
-	uint32_t version;
-	uint8_t  uuid[16];
-	uint64_t nblocks;
-//	struct bpfs_tree_root inode_root; // TODO
-	uint64_t inode_addr; // just the second block?
-	uint64_t ninodeblocks;
-};
-
-
 #define BPFS_TREE_MAX_HEIGHT 5
 #define BPFS_TREE_ROOT_MAX_ADDR (1 << (sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT))
 
@@ -69,6 +57,16 @@ struct bpfs_tree_root
 	uint64_t addr; // : sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT;
 	uint64_t nbytes;
 	uint64_t nblocks; // TODO: remove, to update size atomically and in-place
+};
+
+
+struct bpfs_super
+{
+	uint32_t magic;
+	uint32_t version;
+	uint8_t  uuid[16];
+	uint64_t nblocks;
+	struct bpfs_tree_root inode_root;
 };
 
 
@@ -98,7 +96,7 @@ struct bpfs_inode
 	struct bpfs_time mtime;
 	uint64_t flags;
 	struct bpfs_tree_root root;
-};
+} __attribute__((aligned(128))); // pad to evenly fit in a block
 
 #define BPFS_INODES_PER_BLOCK (BPFS_BLOCK_SIZE / sizeof(struct bpfs_inode))
 
