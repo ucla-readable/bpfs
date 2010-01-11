@@ -112,5 +112,8 @@ struct bpfs_dirent
 
 #define BPFS_DIRENT_ALIGN 8
 #define BPFS_DIRENT_MAX_NAME_LEN (BPFS_BLOCK_SIZE - sizeof(struct bpfs_dirent) - 1)
+#define BPFS_DIRENT_LEN(name_len) \
+	ROUNDUP64(sizeof(struct bpfs_dirent) + (name_len), BPFS_DIRENT_ALIGN)
+#define BPFS_DIRENT_MIN_LEN BPFS_DIRENT_LEN(0)
 
 #endif

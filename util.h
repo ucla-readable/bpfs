@@ -68,7 +68,4 @@
     ({ uint64_t __n = (n);  (((uint64_t) (a) + __n - 1) & ~(__n - 1)); })
 #define ROUNDDOWN64(a, n)   (((uint64_t) (a)) & ~((n) - 1))
 
-#define BPFS_DIRENT_LEN(name_len) \
-	ROUNDUP64(sizeof(struct bpfs_dirent) + (name_len), BPFS_DIRENT_ALIGN)
-
 #endif
