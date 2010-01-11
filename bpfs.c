@@ -502,18 +502,18 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		else
 			child_blockno = child_new_blockno = indir->addr[no];
 		if (height == 1)
-			r = crawl_leaf(indir->addr[no], child_blockoff,
+			r = crawl_leaf(child_blockno, child_blockoff,
 			               child_off, child_size, child_valid,
 			               crawl_start, child_may_commit, callback, user,
 			               bcallback, &child_new_blockno);
 		else
-			r = crawl_indir(indir->addr[no], child_blockoff,
+			r = crawl_indir(child_blockno, child_blockoff,
 			                child_off, child_size, child_valid,
 			                crawl_start, child_may_commit,
 			                height - 1, child_max_nblocks,
 			                callback, user, bcallback,
 			                &child_new_blockno);
-		if (r >= 0 && (!child_valid || indir->addr[no] != child_new_blockno))
+		if (r >= 0 && child_blockno != child_new_blockno)
 		{
 			xassert(may_commit)
 			indir->addr[no] = child_new_blockno;
