@@ -21,6 +21,15 @@
 #define BPFS_S_IFCHR  0x2000
 #define BPFS_S_IFIFO  0x1000
 
+#define __BPFS_S_ISTYPE(mode, mask) (((mode) & BPFS_S_IFMT) == (mask))
+#define BPFS_S_ISSOCK(mode) __BPFS_S_ISTYPE((mode), BPFS_S_IFSOCK)
+#define BPFS_S_ISLNK(mode)  __BPFS_S_ISTYPE((mode), BPFS_S_IFLNK)
+#define BPFS_S_ISREG(mode)  __BPFS_S_ISTYPE((mode), BPFS_S_IFREG)
+#define BPFS_S_ISBLK(mode)  __BPFS_S_ISTYPE((mode), BPFS_S_IFBLK)
+#define BPFS_S_ISDIR(mode)  __BPFS_S_ISTYPE((mode), BPFS_S_IFDIR)
+#define BPFS_S_ISCHR(mode)  __BPFS_S_ISTYPE((mode), BPFS_S_IFCHR)
+#define BPFS_S_ISFIFO(mode) __BPFS_S_ISTYPE((mode), BPFS_S_IFIFO)
+
 #define BPFS_S_IPERM  0x0FFF
 #define BPFS_S_ISUID  0x0800  // SUID
 #define BPFS_S_ISGID  0x0400  // SGID

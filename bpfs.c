@@ -765,7 +765,7 @@ static void discover_inode_allocations(uint64_t ino)
 
 	// TODO: combine the inode and block discovery loops?
 	discover_tree_allocations(&inode->root);
-	if (inode->mode & BPFS_S_IFDIR)
+	if (BPFS_S_ISDIR(inode->mode))
 		xcall(crawl(&inode->root, 0, 0, inode->root.nbytes,
 		      callback_discover_inodes, NULL));
 }
@@ -851,7 +851,7 @@ static struct bpfs_dirent* find_dirent(struct bpfs_inode *parent,
 	struct str str = {(char*) name, name_len};
 	struct str_dirent sd = {&str, NULL};
 	int r;
-	assert(parent->mode & BPFS_S_IFDIR);
+	assert(BPFS_S_ISDIR(parent->mode));
 
 	r = crawl(&parent->root, 0, 0, parent->root.nbytes, callback_find_dirent,
 	          &sd);
@@ -966,7 +966,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	time_t now;
 	int r;
 
-	assert(!!link == !!(mode & S_IFLNK));
+	assert(!!link == !!S_ISLNK(mode));
 
 	if (name_len > BPFS_DIRENT_MAX_NAME_LEN)
 		return -ENAMETOOLONG;
@@ -1008,14 +1008,14 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	// TODO: flags
 	inode->root.addr = BPFS_BLOCKNO_INVALID;
 
-	if (mode & (S_IFDIR | S_IFLNK))
+	if (S_ISDIR(mode) || S_ISLNK(mode))
 	{
 		inode->root.addr = alloc_block();
 		if (inode->root.addr == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 		inode->root.nblocks++;
 
-		if (mode & S_IFDIR)
+		if (S_ISDIR(mode))
 		{
 			struct bpfs_dirent *ndirent;
 
@@ -1035,7 +1035,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 			ndirent->name_len = strlen(ndirent->name) + 1;
 			ndirent->rec_len = BPFS_DIRENT_LEN(ndirent->name_len);
 		}
-		else if (mode & S_IFLNK)
+		else if (S_ISLNK(mode))
 		{
 			inode->root.nbytes = strlen(link) + 1;
 			assert(inode->root.nbytes <= BPFS_BLOCK_SIZE); // else use crawler
@@ -1213,7 +1213,7 @@ static void fuse_readlink(fuse_req_t req, fuse_ino_t ino)
 
 	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
 
-	assert(inode->mode & BPFS_S_IFLNK);
+	assert(BPFS_S_ISLNK(inode->mode));
 
 	xcall(fuse_reply_readlink(req, get_block(inode->root.addr)));
 }
@@ -1228,7 +1228,7 @@ static void fuse_mknod(fuse_req_t req, fuse_ino_t parent_ino, const char *name,
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	if (mode & (S_IFBLK | S_IFCHR))
+	if (S_ISBLK(mode) || S_ISCHR(mode))
 	{
 		// Need to store rdev to support these two types
 		fuse_reply_err(req, ENOSYS);
@@ -1548,7 +1548,7 @@ static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
 		xcall(fuse_reply_err(req, EINVAL));
 		return;
 	}
-	if (!(inode->mode & BPFS_S_IFDIR))
+	if (!(BPFS_S_ISDIR(inode->mode)))
 	{
 		xcall(fuse_reply_err(req, ENOTDIR));
 		return;
@@ -1653,7 +1653,7 @@ static void fuse_open(fuse_req_t req, fuse_ino_t ino,
 		xcall(fuse_reply_err(req, EINVAL));
 		return;
 	}
-	if (inode->mode & BPFS_S_IFDIR)
+	if (BPFS_S_ISDIR(inode->mode))
 	{
 		xcall(fuse_reply_err(req, EISDIR));
 		return;
@@ -1694,7 +1694,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 		xcall(fuse_reply_err(req, ENOENT));
 		return;
 	}
-	assert(inode->mode & BPFS_S_IFREG);
+	assert(BPFS_S_ISREG(inode->mode));
 
 	size = MIN(size, inode->root.nbytes - off);
 	first_blockoff = off / BPFS_BLOCK_SIZE;
@@ -1707,6 +1707,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 		return;
 	}
 	r = crawl(&inode->root, 0, off, size, callback_read, iov);
+
 	xcall(fuse_reply_iov(req, iov, nblocks));
 	free(iov);
 }
@@ -1736,7 +1737,7 @@ static void fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 		xcall(fuse_reply_err(req, ENOENT));
 		return;
 	}
-	assert(inode->mode & BPFS_S_IFREG);
+	assert(BPFS_S_ISREG(inode->mode));
 
 	// crawl won't modify buf; cast away const only because of crawl's type
 	r = crawl(&inode->root, 1, off, size, callback_write, (char*) buf);
