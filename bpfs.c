@@ -99,6 +99,7 @@ static mode_t b2f_filetype(uint32_t bpfs_file_type)
 			break;
 		case BPFS_TYPE_SYMLINK:
 			mode |= S_IFLNK;
+			break;
 		default:
 			xassert(0);
 	}
@@ -130,6 +131,7 @@ static uint32_t f2b_filetype(mode_t fuse_mode)
 			break;
 		case S_IFLNK:
 			file_type |= BPFS_TYPE_SYMLINK;
+			break;
 		default:
 			xassert(0);
 	}
@@ -952,6 +954,7 @@ static int alloc_dirent(struct bpfs_inode *parent, const char *name,
 
 static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
                        const char *name, mode_t mode,
+                       const char *link,
                        struct bpfs_dirent **pdirent)
 {
 	struct bpfs_inode *parent = get_inode(parent_ino);
@@ -962,6 +965,8 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	const struct fuse_ctx *ctx;
 	time_t now;
 	int r;
+
+	assert(!!link == !!(mode & S_IFLNK));
 
 	if (name_len > BPFS_DIRENT_MAX_NAME_LEN)
 		return -ENAMETOOLONG;
@@ -1003,28 +1008,39 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	// TODO: flags
 	inode->root.addr = BPFS_BLOCKNO_INVALID;
 
-	if (mode & S_IFDIR)
+	if (mode & (S_IFDIR | S_IFLNK))
 	{
-		struct bpfs_dirent *ndirent;
-
 		inode->root.addr = alloc_block();
 		if (inode->root.addr == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 		inode->root.nblocks++;
-		inode->root.nbytes += BPFS_BLOCK_SIZE;
-		ndirent = (struct bpfs_dirent*) get_block(inode->root.addr);
-		assert(ndirent);
 
-		inode->nlinks++;
+		if (mode & S_IFDIR)
+		{
+			struct bpfs_dirent *ndirent;
 
-		parent->nlinks++;
-		static_assert(BPFS_INO_INVALID == 0);
-		memset(ndirent, 0, BPFS_BLOCK_SIZE);
-		ndirent->ino = parent_ino;
-		ndirent->file_type = BPFS_TYPE_DIR;
-		strcpy(ndirent->name, "..");
-		ndirent->name_len = strlen(ndirent->name) + 1;
-		ndirent->rec_len = BPFS_DIRENT_LEN(ndirent->name_len);
+			inode->root.nbytes += BPFS_BLOCK_SIZE;
+
+			ndirent = (struct bpfs_dirent*) get_block(inode->root.addr);
+			assert(ndirent);
+
+			inode->nlinks++;
+
+			parent->nlinks++;
+			static_assert(BPFS_INO_INVALID == 0);
+			memset(ndirent, 0, BPFS_BLOCK_SIZE);
+			ndirent->ino = parent_ino;
+			ndirent->file_type = BPFS_TYPE_DIR;
+			strcpy(ndirent->name, "..");
+			ndirent->name_len = strlen(ndirent->name) + 1;
+			ndirent->rec_len = BPFS_DIRENT_LEN(ndirent->name_len);
+		}
+		else if (mode & S_IFLNK)
+		{
+			inode->root.nbytes = strlen(link) + 1;
+			assert(inode->root.nbytes <= BPFS_BLOCK_SIZE); // else use crawler
+			memcpy(get_block(inode->root.addr), link, inode->root.nbytes);
+		}
 	}
 
 	dirent->file_type = f2b_filetype(mode);
@@ -1191,30 +1207,56 @@ static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 	xcall(fuse_reply_attr(req, &stbuf, STDTIMEOUT));
 }
 
-#if 0
 static void fuse_readlink(fuse_req_t req, fuse_ino_t ino)
 {
-	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino,);
+	struct bpfs_inode *inode = get_inode(ino);
+
+	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
+
+	assert(inode->mode & BPFS_S_IFLNK);
+
+	xcall(fuse_reply_readlink(req, get_block(inode->root.addr)));
 }
 
 static void fuse_mknod(fuse_req_t req, fuse_ino_t parent_ino, const char *name,
                        mode_t mode, dev_t rdev)
 {
+	struct bpfs_dirent *dirent;
+	struct fuse_entry_param e;
+	int r;
+
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
+
+	if (mode & (S_IFBLK | S_IFCHR))
+	{
+		// Need to store rdev to support these two types
+		fuse_reply_err(req, ENOSYS);
+		return;
+	}
+
+	r = create_file(req, parent_ino, name, mode, NULL, &dirent);
+	if (r < 0)
+	{
+		xcall(fuse_reply_err(req, -r));
+		return;
+	}
+
+	fill_fuse_entry(dirent, &e);
+	xcall(fuse_reply_entry(req, &e));
 }
-#endif
 
 static void fuse_mkdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name,
                        mode_t mode)
 {
 	struct bpfs_dirent *dirent;
 	struct fuse_entry_param e;
+	int r;
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	int r = create_file(req, parent_ino, name, mode | S_IFDIR, &dirent);
+	r = create_file(req, parent_ino, name, mode | S_IFDIR, NULL, &dirent);
 	if (r < 0)
 	{
 		xcall(fuse_reply_err(req, -r));
@@ -1331,14 +1373,26 @@ static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 	xcall(fuse_reply_err(req, FUSE_ERR_SUCCESS));
 }
 
-#if 0
 static void fuse_symlink(fuse_req_t req, const char *link,
                          fuse_ino_t parent_ino, const char *name)
 {
+	struct bpfs_dirent *dirent;
+	struct fuse_entry_param e;
+	int r;
+
 	Dprintf("%s(link = '%s', parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, link, parent_ino, name);
+
+	r = create_file(req, parent_ino, name, S_IFLNK | 0777, link, &dirent);
+	if (r < 0)
+	{
+		xcall(fuse_reply_err(req, -r));
+		return;
+	}
+
+	fill_fuse_entry(dirent, &e);
+	xcall(fuse_reply_entry(req, &e));
 }
-#endif
 
 static void fuse_rename(fuse_req_t req,
                         fuse_ino_t src_parent_ino, const char *src_name,
@@ -1546,14 +1600,23 @@ static void fuse_releasedir(fuse_req_t req, fuse_ino_t ino,
 {
 	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
 }
+#endif
+
+static int sync_inode(uint64_t ino, int datasync)
+{
+	// TODO: flush cache lines and memory controller
+	printf("fsync(ino = %" PRIu64 ", datasync = %d): not yet implemented\n",
+	       ino, datasync);
+	return 0;
+}
 
 static void fuse_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
                           struct fuse_file_info *fi)
 {
 	Dprintf("%s(ino = %lu, datasync = %d)\n", __FUNCTION__, ino, datasync);
-}
-#endif
 
+	xcall(fuse_reply_err(req, -sync_inode(ino, datasync)));
+}
 
 static void fuse_create(fuse_req_t req, fuse_ino_t parent_ino,
                         const char *name, mode_t mode,
@@ -1561,11 +1624,12 @@ static void fuse_create(fuse_req_t req, fuse_ino_t parent_ino,
 {
 	struct bpfs_dirent *dirent;
 	struct fuse_entry_param e;
+	int r;
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	int r = create_file(req, parent_ino, name, mode, &dirent);
+	r = create_file(req, parent_ino, name, mode, NULL, &dirent);
 	if (r < 0)
 	{
 		xcall(fuse_reply_err(req, -r));
@@ -1695,13 +1759,15 @@ static void fuse_release(fuse_req_t req, fuse_ino_t ino,
 {
 	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
 }
+#endif
 
 static void fuse_fsync(fuse_req_t req, fuse_ino_t ino, int datasync,
                        struct fuse_file_info *fi)
 {
 	Dprintf("%s(ino = %lu, datasync = %d)\n", __FUNCTION__, ino, datasync);
+
+	xcall(fuse_reply_err(req, -sync_inode(ino, datasync)));
 }
-#endif
 
 
 static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
@@ -1718,14 +1784,14 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 //	ADD_FUSE_CALLBACK(forget);
 	ADD_FUSE_CALLBACK(getattr);
 	ADD_FUSE_CALLBACK(setattr);
-//	ADD_FUSE_CALLBACK(readlink);
-//	ADD_FUSE_CALLBACK(mknod);
+	ADD_FUSE_CALLBACK(readlink);
+	ADD_FUSE_CALLBACK(mknod);
 	ADD_FUSE_CALLBACK(mkdir);
 	ADD_FUSE_CALLBACK(unlink);
 	ADD_FUSE_CALLBACK(rmdir);
-//	ADD_FUSE_CALLBACK(symlink);
+	ADD_FUSE_CALLBACK(symlink);
 	ADD_FUSE_CALLBACK(rename);
-//	ADD_FUSE_CALLBACK(link);
+//	ADD_FUSE_CALLBACK(link); // does unlink(file with #links > 1) require CoW?
 
 //	ADD_FUSE_CALLBACK(setxattr);
 //	ADD_FUSE_CALLBACK(getxattr);
@@ -1735,7 +1801,7 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 //	ADD_FUSE_CALLBACK(opendir);
 	ADD_FUSE_CALLBACK(readdir);
 //	ADD_FUSE_CALLBACK(releasedir);
-//	ADD_FUSE_CALLBACK(fsyncdir);
+	ADD_FUSE_CALLBACK(fsyncdir);
 
 	ADD_FUSE_CALLBACK(create);
 	ADD_FUSE_CALLBACK(open);
@@ -1743,7 +1809,7 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 	ADD_FUSE_CALLBACK(write);
 //	ADD_FUSE_CALLBACK(flush);
 //	ADD_FUSE_CALLBACK(release);
-//	ADD_FUSE_CALLBACK(fsync);
+	ADD_FUSE_CALLBACK(fsync);
 
 //	ADD_FUSE_CALLBACK(getlk);
 //	ADD_FUSE_CALLBACK(setlk);
