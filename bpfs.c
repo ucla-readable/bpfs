@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,7 +21,6 @@
 // TODO:
 // - make time higher resolution. See ext4, bits/stat.h, linux/time.h.
 // - add gcc flag to warn about ignored return values?
-// - update [acm]time
 // - blockno can mean bpram block no or file block no
 // - enable writes >4096B?
 // - tell valgrind about block and inode alloc and free functions
@@ -40,7 +40,6 @@
 # define Dprintf(x...) do {} while(0)
 #endif
 
-typedef int bool_t;
 
 struct str
 {
@@ -48,6 +47,9 @@ struct str
 	size_t len;
 };
 
+
+//
+// give access to bpram without passing these variables everywhere
 
 static char *bpram;
 static size_t bpram_size;
@@ -60,12 +62,12 @@ static struct bpfs_super *super;
 
 typedef int (*crawl_callback)(uint64_t blockoff, char *block,
                               unsigned off, unsigned size, unsigned valid,
-                              uint64_t crawl_start, bool_t may_commit,
+                              uint64_t crawl_start, bool may_commit,
                               void *user, uint64_t *blockno);
 
 typedef void (*crawl_blockno_callback)(uint64_t blockno);
 
-static int crawl(struct bpfs_tree_root *root, bool_t may_commit,
+static int crawl(struct bpfs_tree_root *root, bool may_commit,
                  uint64_t off, uint64_t size,
                  crawl_callback callback, void *user);
 
@@ -347,7 +349,7 @@ static void destroy_inode_allocations(void)
 
 static int callback_init_inode(uint64_t blockoff, char *block,
                                unsigned off, unsigned size, unsigned valid,
-                               uint64_t crawl_start, bool_t may_commit,
+                               uint64_t crawl_start, bool may_commit,
                                void *user, uint64_t *blockno)
 {
 #ifndef NDEBUG
@@ -394,7 +396,7 @@ static void free_inode(uint64_t ino)
 
 static int callback_get_inode(uint64_t blockoff, char *block,
                               unsigned off, unsigned size, unsigned valid,
-                              uint64_t crawl_start, bool_t may_commit,
+                              uint64_t crawl_start, bool may_commit,
                               void *user, uint64_t *blockno)
 {
 	struct bpfs_inode **inode = user;
@@ -484,7 +486,7 @@ static void tree_change_height(struct bpfs_tree_root *root, unsigned height_new)
 
 static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
                       unsigned off, unsigned size, unsigned valid,
-                      uint64_t crawl_start, bool_t may_commit,
+                      uint64_t crawl_start, bool may_commit,
 					  crawl_callback callback, void *user,
 					  crawl_blockno_callback bcallback,
 					  uint64_t *new_blockno)
@@ -525,7 +527,7 @@ static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
 
 static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
                        uint64_t off, uint64_t size, uint64_t valid,
-                       uint64_t crawl_start, bool_t may_commit,
+                       uint64_t crawl_start, bool may_commit,
                        unsigned height, uint64_t max_nblocks,
                        crawl_callback callback, void *user,
                        crawl_blockno_callback bcallback,
@@ -537,7 +539,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 	uint64_t child_max_nbytes = child_max_nblocks * BPFS_BLOCK_SIZE;
 	uint64_t firstno = off / (BPFS_BLOCK_SIZE * child_max_nblocks);
 	uint64_t lastno = (off + size - 1) / (BPFS_BLOCK_SIZE * child_max_nblocks);
-	bool_t child_may_commit = may_commit && (firstno == lastno);
+	bool child_may_commit = may_commit && (firstno == lastno);
 	uint64_t no;
 	int ret = 0;
 
@@ -641,7 +643,7 @@ static void crawl_blocknos(struct bpfs_tree_root *root,
 	}
 }
 
-static int crawl(struct bpfs_tree_root *root, bool_t may_commit,
+static int crawl(struct bpfs_tree_root *root, bool may_commit,
                  uint64_t off, uint64_t size,
                  crawl_callback callback, void *user)
 {
@@ -734,7 +736,7 @@ static void discover_inode_allocations(uint64_t ino);
 static int callback_discover_inodes(uint64_t blockoff, char *block,
                                     unsigned off, unsigned size,
                                     unsigned valid, uint64_t crawl_start,
-                                    bool_t may_commit, void *user,
+                                    bool may_commit, void *user,
                                     uint64_t *blockno)
 {
 	unsigned start = off;
@@ -817,7 +819,7 @@ struct str_dirent
 
 static int callback_find_dirent(uint64_t blockoff, char *block,
                                 unsigned off, unsigned size, unsigned valid,
-                                uint64_t crawl_start, bool_t may_commit,
+                                uint64_t crawl_start, bool may_commit,
                                 void *sd_void, uint64_t *blockno)
 {
 	struct str_dirent *str_dirent = (struct str_dirent*) sd_void;
@@ -862,7 +864,7 @@ static struct bpfs_dirent* find_dirent(struct bpfs_inode *parent,
 
 static int callback_dirent_plug(uint64_t blockoff, char *block,
                                 unsigned off, unsigned size,  unsigned valid,
-                                uint64_t crawl_start, bool_t may_commit,
+                                uint64_t crawl_start, bool may_commit,
                                 void *sd_void, uint64_t *blockno)
 {
 	struct str_dirent *sd = (struct str_dirent*) sd_void;
@@ -902,7 +904,7 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 
 static int callback_dirent_append(uint64_t blockoff, char *block,
                                   unsigned off, unsigned size,  unsigned valid,
-                                  uint64_t crawl_start, bool_t may_commit,
+                                  uint64_t crawl_start, bool may_commit,
                                   void *sd_void, uint64_t *blockno)
 {
 	struct str_dirent *sd = (struct str_dirent*) sd_void;
@@ -1314,7 +1316,7 @@ static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
 
 static int callback_empty_dir(uint64_t blockoff, char *block,
                               unsigned off, unsigned size, unsigned valid,
-                              uint64_t crawl_start, bool_t may_commit,
+                              uint64_t crawl_start, bool may_commit,
                               void *ppi, uint64_t *blockno)
 {
 	uint64_t parent_ino = *(fuse_ino_t*) ppi;
@@ -1497,7 +1499,7 @@ struct readdir_params
 
 static int callback_readdir(uint64_t blockoff, char *block,
                             unsigned off, unsigned size, unsigned valid,
-                            uint64_t crawl_start, bool_t may_commit,
+                            uint64_t crawl_start, bool may_commit,
                             void *p_void, uint64_t *blockno)
 {
 	struct readdir_params *params = (struct readdir_params*) p_void;
@@ -1679,7 +1681,7 @@ static void fuse_open(fuse_req_t req, fuse_ino_t ino,
 
 static int callback_read(uint64_t blockoff, char *block,
                          unsigned off, unsigned size, unsigned valid,
-                         uint64_t crawl_start, bool_t may_commit,
+                         uint64_t crawl_start, bool may_commit,
                          void *iov_void, uint64_t *new_blockno)
 {
 	struct iovec *iov = iov_void;
@@ -1728,7 +1730,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 
 static int callback_write(uint64_t blockoff, char *block,
                           unsigned off, unsigned size, unsigned valid,
-                          uint64_t crawl_start, bool_t may_commit,
+                          uint64_t crawl_start, bool may_commit,
                           void *buf, uint64_t *new_blockno)
 {
 	uint64_t buf_offset = blockoff * BPFS_BLOCK_SIZE + off - crawl_start;
