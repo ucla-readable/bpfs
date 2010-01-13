@@ -15,7 +15,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/vfs.h>
-#include <time.h>
 #include <unistd.h>
 
 // TODO:
@@ -963,7 +962,6 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	struct bpfs_inode *inode;
 	struct bpfs_dirent *dirent;
 	const struct fuse_ctx *ctx;
-	time_t now;
 	int r;
 
 	assert(!!link == !!S_ISLNK(mode));
@@ -989,8 +987,6 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 
 	ctx = fuse_req_ctx(req);
 
-	time(&now);
-
 	// TODO: any reason to write this new inode through crawl()?
 
 	inode->generation++;
@@ -1002,11 +998,11 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	inode->root.height = 0;
 	inode->root.nbytes = 0;
 	inode->root.nblocks = 0;
-	inode->atime.sec = (typeof(inode->atime.sec)) now;
-	xassert(inode->atime.sec == now);
-	inode->mtime = inode->ctime = inode->atime;
+	inode->mtime = inode->ctime = inode->atime = BPFS_TIME_NOW();
 	// TODO: flags
 	inode->root.addr = BPFS_BLOCKNO_INVALID;
+
+	parent->ctime = parent->mtime = inode->mtime;
 
 	if (S_ISDIR(mode) || S_ISLNK(mode))
 	{
@@ -1108,21 +1104,21 @@ static void fill_fuse_entry(const struct bpfs_dirent *dirent, struct fuse_entry_
 static void fuse_lookup(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 {
 	size_t name_len = strlen(name) + 1;
-	struct bpfs_inode *parent_inode;
+	struct bpfs_inode *parent;
 	struct bpfs_dirent *dirent;
 	struct fuse_entry_param e;
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	parent_inode = get_inode(parent_ino);
-	if (!parent_inode)
+	parent = get_inode(parent_ino);
+	if (!parent)
 	{
 		xcall(fuse_reply_err(req, ENOENT));
 		return;
 	}
 
-	dirent = find_dirent(parent_inode, name, name_len);
+	dirent = find_dirent(parent, name, name_len);
 	if (!dirent)
 	{
 		xcall(fuse_reply_err(req, ENOENT));
@@ -1200,8 +1196,13 @@ static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 	// TODO: make atomic. and optimize for subset of field changes?
 	*inode = inode_tmp;
 
+	inode->ctime = BPFS_TIME_NOW();
+
 	if (to_set & FUSE_SET_ATTR_SIZE)
+	{
 		tree_change_height(&inode->root, tree_height(attr->st_size));
+		inode->mtime = inode->ctime;
+	}
 
 	bpfs_stat(ino, &stbuf);
 	xcall(fuse_reply_attr(req, &stbuf, STDTIMEOUT));
@@ -1267,25 +1268,37 @@ static void fuse_mkdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name,
 	xcall(fuse_reply_entry(req, &e));
 }
 
+static void do_unlink(struct bpfs_inode *parent, struct bpfs_dirent *dirent,
+                      struct bpfs_inode *inode)
+{
+	uint64_t ino = dirent->ino;
+
+	dirent->ino = BPFS_INO_INVALID;
+
+	parent->ctime = parent->mtime = BPFS_TIME_NOW();
+
+	crawl_blocknos(&inode->root, 0, inode->root.nbytes, free_block);
+	free_inode(ino);
+}
+
 static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
                         const char *name)
 {
-	struct bpfs_inode *parent_inode;
+	struct bpfs_inode *parent;
 	struct bpfs_dirent *dirent;
 	struct bpfs_inode *inode;
-	uint64_t ino;
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	parent_inode = get_inode(parent_ino);
-	if (!parent_inode)
+	parent = get_inode(parent_ino);
+	if (!parent)
 	{
 		xcall(fuse_reply_err(req, EINVAL));
 		return;
 	}
 
-	dirent = find_dirent(parent_inode, name, strlen(name) + 1);
+	dirent = find_dirent(parent, name, strlen(name) + 1);
 	if (!dirent)
 	{
 		xcall(fuse_reply_err(req, ENOENT));
@@ -1293,12 +1306,8 @@ static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
 	}
 	inode = get_inode(dirent->ino);
 	assert(inode);
-	ino = dirent->ino;
 
-	dirent->ino = BPFS_INO_INVALID;
-
-	crawl_blocknos(&inode->root, 0, inode->root.nbytes, free_block);
-	free_inode(ino);
+	do_unlink(parent, dirent, inode);
 
 	xcall(fuse_reply_err(req, FUSE_ERR_SUCCESS));
 }
@@ -1330,23 +1339,22 @@ static int callback_empty_dir(uint64_t blockoff, char *block,
 
 static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 {
-	struct bpfs_inode *parent_inode;
+	struct bpfs_inode *parent;
 	struct bpfs_dirent *dirent;
 	struct bpfs_inode *inode;
-	uint64_t ino;
 	int r;
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	parent_inode = get_inode(parent_ino);
-	if (!parent_inode)
+	parent = get_inode(parent_ino);
+	if (!parent)
 	{
 		xcall(fuse_reply_err(req, EINVAL));
 		return;
 	}
 
-	dirent = find_dirent(parent_inode, name, strlen(name) + 1);
+	dirent = find_dirent(parent, name, strlen(name) + 1);
 	if (!dirent)
 	{
 		xcall(fuse_reply_err(req, ENOENT));
@@ -1354,7 +1362,6 @@ static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 	}
 	inode = get_inode(dirent->ino);
 	assert(inode);
-	ino = dirent->ino;
 
 	r = crawl(&inode->root, 0, 0, inode->root.nbytes, callback_empty_dir,
 	          &parent_ino);
@@ -1365,10 +1372,7 @@ static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		return;
 	}
 
-	dirent->ino = BPFS_INO_INVALID;
-
-	crawl_blocknos(&inode->root, 0, inode->root.nbytes, free_block);
-	free_inode(ino);
+	do_unlink(parent, dirent, inode);
 
 	xcall(fuse_reply_err(req, FUSE_ERR_SUCCESS));
 }
@@ -1451,8 +1455,14 @@ static void fuse_rename(fuse_req_t req,
 	dst_dirent->ino = src_dirent->ino;
 	src_dirent->ino = BPFS_INO_INVALID;
 
+	dst_parent->ctime = dst_parent->mtime = BPFS_TIME_NOW();
+	src_parent->ctime = src_parent->mtime = dst_parent->ctime;
+	if (BPFS_S_ISDIR(inode->mode))
+		inode->ctime = src_parent->ctime;
+
 	if (unlinked_inode)
 	{
+		// like do_unlink(), but parent [cm]time and dirent already updated:
 		crawl_blocknos(&unlinked_inode->root, 0,
 		               unlinked_inode->root.nbytes, free_block);
 		free_inode(unlinked_ino);
@@ -1590,6 +1600,8 @@ static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
 		return;
 	}
 
+	inode->atime = BPFS_TIME_NOW();
+
 	xcall(fuse_reply_buf(req, params.buf, params.total_size));
 	free(params.buf);
 }
@@ -1708,6 +1720,8 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 	}
 	r = crawl(&inode->root, 0, off, size, callback_read, iov);
 
+	inode->atime = BPFS_TIME_NOW();
+
 	xcall(fuse_reply_iov(req, iov, nblocks));
 	free(iov);
 }
@@ -1744,7 +1758,10 @@ static void fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 	if (r < 0)
 		xcall(fuse_reply_err(req, -r));
 	else
+	{
+		inode->mtime = BPFS_TIME_NOW();
 		xcall(fuse_reply_write(req, size));
+	}
 }
 
 #if 0

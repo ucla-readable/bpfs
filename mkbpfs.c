@@ -23,13 +23,10 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	struct bpfs_inode *inodes;
 	struct bpfs_inode *root_inode;
 	struct bpfs_dirent *root_dirent;
-	time_t now;
 	int i;
 
 	if (bpram_size < BPFS_MIN_NBYTES)
 		return -ENOSPC;
-
-	time(&now);
 
 	super = (struct bpfs_super*) bpram;
 	super->magic = BPFS_FS_MAGIC;
@@ -61,9 +58,7 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	root_inode->root.height = 0;
 	root_inode->root.nbytes = BPFS_BLOCK_SIZE;
 	root_inode->root.nblocks = 1;
-	root_inode->atime.sec = (typeof(root_inode->atime.sec)) now;
-	xassert(root_inode->atime.sec == now);
-	root_inode->mtime = root_inode->ctime = root_inode->atime;
+	root_inode->mtime = root_inode->ctime = root_inode->atime = BPFS_TIME_NOW();
 	// TODO: flags
 	root_inode->root.addr = super->inode_root.addr + super->inode_root.nblocks;
 

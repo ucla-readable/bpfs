@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // if cond is false, display message and then exit
 #define xassert(cond) \
@@ -67,5 +68,8 @@
 #define ROUNDUP64(a, n) \
     ({ uint64_t __n = (n);  (((uint64_t) (a) + __n - 1) & ~(__n - 1)); })
 #define ROUNDDOWN64(a, n)   (((uint64_t) (a)) & ~((n) - 1))
+
+#define BPFS_TIME_NOW() \
+	({ struct bpfs_time btime = {time(NULL)}; btime; })
 
 #endif
