@@ -25,6 +25,7 @@
 // - enable writes >4096B?
 // - tell valgrind about block and inode alloc and free functions
 // - merge and breakup empty dirents
+// - remember that atomic 64b writes will only be atomic on 64b systems?
 
 
 // STDTIMEOUT is not 0 because of a fuse kernel module bug.
