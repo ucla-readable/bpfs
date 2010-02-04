@@ -5,9 +5,13 @@
 
 #define BPFS_FS_MAGIC 0xB9F5
 
+#define BPFS_STRUCT_VERSION 2
+
 #define BPFS_BLOCK_SIZE 4096
 
 #define BPFS_BLOCKNO_INVALID 0
+/* 0 is BPFS_BLOCKNO_INVALID and 1 and 2 are super blocks */
+#define BPFS_BLOCKNO_FIRST_ALLOC 3
 
 #define BPFS_INO_INVALID 0
 #define BPFS_INO_ROOT    1
@@ -65,7 +69,6 @@ struct bpfs_tree_root
 	uint64_t height; // : BPFS_TREE_MAX_HEIGHT; // #levels of indir blocks
 	uint64_t addr; // : sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT;
 	uint64_t nbytes;
-	uint64_t nblocks; // TODO: remove, to update size atomically and in-place
 };
 
 
@@ -75,7 +78,9 @@ struct bpfs_super
 	uint32_t version;
 	uint8_t  uuid[16];
 	uint64_t nblocks;
-	struct bpfs_tree_root inode_root;
+	enum commit_mode { BPFS_COMMIT_SP = 0, BPFS_COMMIT_SCSP } commit_mode;
+	uint64_t inode_root_addr; // block number containing the inode tree root
+	uint64_t inode_root_addr_2; // only used with SP; for commit consistency
 };
 
 

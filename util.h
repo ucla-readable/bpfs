@@ -69,6 +69,9 @@
     ({ uint64_t __n = (n);  (((uint64_t) (a) + __n - 1) & ~(__n - 1)); })
 #define ROUNDDOWN64(a, n)   (((uint64_t) (a)) & ~((n) - 1))
 
+#define NBLOCKS_FOR_NBYTES(nbytes) \
+	(((nbytes) + BPFS_BLOCK_SIZE - 1) / BPFS_BLOCK_SIZE)
+
 #define BPFS_TIME_NOW() \
 	({ struct bpfs_time btime = {time(NULL)}; btime; })
 
