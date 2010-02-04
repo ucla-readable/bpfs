@@ -615,6 +615,7 @@ static uint64_t alloc_inode(void)
 		if (crawl_inodes(inode_root->nbytes, inode_root->nbytes, COMMIT_ATOMIC,
 		                 callback_init_inodes, NULL) < 0)
 			return BPFS_INO_INVALID;
+		inode_root = get_inode_root();
 		xcall(bitmap_resize(&inode_bitmap,
 		                    inode_root->nbytes / sizeof(struct bpfs_inode)));
 		no = bitmap_alloc(&inode_bitmap);
@@ -1264,6 +1265,15 @@ static int recover_superblock(void)
 static struct bpfs_super *persistent_super;
 static struct bpfs_super staged_super;
 
+static void revert_superblock(void)
+{
+	assert(bpfs_super == &staged_super);
+
+	staged_super.inode_root_addr = persistent_super->inode_root_addr;
+
+	assert(!memcmp(persistent_super, &staged_super, sizeof(staged_super)));
+}
+
 static void persist_superblock(void)
 {
 	struct bpfs_super *persistent_super_2 = (struct bpfs_super*) (((char*) persistent_super) + BPFS_BLOCK_SIZE);
@@ -1297,6 +1307,10 @@ static void persist_superblock(void)
 
 static void bpfs_abort(void)
 {
+#if !SCSP_ENABLED
+	revert_superblock();
+#endif
+
 	abort_blocks();
 	abort_inodes();
 }
