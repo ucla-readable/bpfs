@@ -38,6 +38,7 @@
 #define SCSP_ENABLED 0
 
 #define DETECT_NONCOW_WRITES (!SCSP_ENABLED && !defined(NDEBUG))
+#define DETECT_ALLOCATION_DIFFS (!defined(NDEBUG))
 
 // Set to 1 to optimize away some COWs
 #define COW_OPT 0
@@ -1269,96 +1270,6 @@ static int crawl_inode_2(uint64_t ino_1, uint64_t off_1, uint64_t size_1,
 
 
 //
-// commit, abort, and recover
-
-#if !SCSP_ENABLED
-static int recover_superblock(void)
-{
-	struct bpfs_super *super_2 = (struct bpfs_super*) (((char*) bpfs_super) + BPFS_BLOCK_SIZE);
-
-	if (bpfs_super->commit_mode == BPFS_COMMIT_SCSP)
-		return 0;
-
-	if (bpfs_super->commit_mode != BPFS_COMMIT_SP)
-		return -1;
-
-	if (bpfs_super->inode_root_addr == bpfs_super->inode_root_addr_2)
-	{
-		if (super_2->inode_root_addr != super_2->inode_root_addr_2)
-			*super_2 = *bpfs_super;
-	}
-	else if (super_2->inode_root_addr == super_2->inode_root_addr_2)
-		*bpfs_super = *super_2;
-	else
-		return -2;
-	return 0;
-}
-
-static struct bpfs_super *persistent_super;
-static struct bpfs_super staged_super;
-
-static void revert_superblock(void)
-{
-	assert(bpfs_super == &staged_super);
-
-	staged_super.inode_root_addr = persistent_super->inode_root_addr;
-
-	assert(!memcmp(persistent_super, &staged_super, sizeof(staged_super)));
-}
-
-static void persist_superblock(void)
-{
-	struct bpfs_super *persistent_super_2 = (struct bpfs_super*) (((char*) persistent_super) + BPFS_BLOCK_SIZE);
-
-	assert(bpfs_super == &staged_super);
-
-#if DETECT_NONCOW_WRITES
-	{
-		size_t len = BPFS_BLOCK_SIZE * 2; /* two super blocks */
-		xsyscall(mprotect(bpram, len, PROT_READ | PROT_WRITE));
-	}
-#endif
-
-	staged_super.inode_root_addr_2        = staged_super.inode_root_addr;
-	persistent_super->inode_root_addr     = staged_super.inode_root_addr;
-	persistent_super->inode_root_addr_2   = staged_super.inode_root_addr;
-	persistent_super_2->inode_root_addr   = staged_super.inode_root_addr;
-	persistent_super_2->inode_root_addr_2 = staged_super.inode_root_addr;
-
-	assert(!memcmp(persistent_super, &staged_super, sizeof(staged_super)));
-	assert(!memcmp(persistent_super_2, &staged_super, sizeof(staged_super)));
-
-#if DETECT_NONCOW_WRITES
-	{
-		size_t len = BPFS_BLOCK_SIZE * 2; /* two super blocks */
-		xsyscall(mprotect(bpram, len, PROT_READ));
-	}
-#endif
-}
-#endif
-
-static void bpfs_abort(void)
-{
-#if !SCSP_ENABLED
-	revert_superblock();
-#endif
-
-	abort_blocks();
-	abort_inodes();
-}
-
-static void bpfs_commit(void)
-{
-#if !SCSP_ENABLED
-	persist_superblock();
-#endif
-
-	commit_blocks();
-	commit_inodes();
-}
-
-
-//
 // block and inode allocation discovery
 
 static void discover_indir_allocations(struct bpfs_indir_block *indir,
@@ -1461,6 +1372,165 @@ static void destroy_allocations(void)
 {
 	destroy_inode_allocations();
 	destroy_block_allocations();
+}
+
+
+//
+// commit, abort, and recover
+
+#if !SCSP_ENABLED
+static int recover_superblock(void)
+{
+	struct bpfs_super *super_2 = (struct bpfs_super*) (((char*) bpfs_super) + BPFS_BLOCK_SIZE);
+
+	if (bpfs_super->commit_mode == BPFS_COMMIT_SCSP)
+		return 0;
+
+	if (bpfs_super->commit_mode != BPFS_COMMIT_SP)
+		return -1;
+
+	if (bpfs_super->inode_root_addr == bpfs_super->inode_root_addr_2)
+	{
+		if (super_2->inode_root_addr != super_2->inode_root_addr_2)
+			*super_2 = *bpfs_super;
+	}
+	else if (super_2->inode_root_addr == super_2->inode_root_addr_2)
+		*bpfs_super = *super_2;
+	else
+		return -2;
+	return 0;
+}
+
+static struct bpfs_super *persistent_super;
+static struct bpfs_super staged_super;
+
+static void revert_superblock(void)
+{
+	assert(bpfs_super == &staged_super);
+
+	staged_super.inode_root_addr = persistent_super->inode_root_addr;
+
+	assert(!memcmp(persistent_super, &staged_super, sizeof(staged_super)));
+}
+
+static void persist_superblock(void)
+{
+	struct bpfs_super *persistent_super_2 = (struct bpfs_super*) (((char*) persistent_super) + BPFS_BLOCK_SIZE);
+
+	assert(bpfs_super == &staged_super);
+
+# if DETECT_NONCOW_WRITES
+	{
+		size_t len = BPFS_BLOCK_SIZE * 2; /* two super blocks */
+		xsyscall(mprotect(bpram, len, PROT_READ | PROT_WRITE));
+	}
+# endif
+
+	staged_super.inode_root_addr_2        = staged_super.inode_root_addr;
+	persistent_super->inode_root_addr     = staged_super.inode_root_addr;
+	persistent_super->inode_root_addr_2   = staged_super.inode_root_addr;
+	persistent_super_2->inode_root_addr   = staged_super.inode_root_addr;
+	persistent_super_2->inode_root_addr_2 = staged_super.inode_root_addr;
+
+	assert(!memcmp(persistent_super, &staged_super, sizeof(staged_super)));
+	assert(!memcmp(persistent_super_2, &staged_super, sizeof(staged_super)));
+
+# if DETECT_NONCOW_WRITES
+	{
+		size_t len = BPFS_BLOCK_SIZE * 2; /* two super blocks */
+		xsyscall(mprotect(bpram, len, PROT_READ));
+	}
+# endif
+}
+#endif
+
+#if !DETECT_ALLOCATION_DIFFS
+static void detect_resource_diffs(void)
+{
+}
+#else
+static void print_free_indices(const char *bitmap, size_t ntotal)
+{
+	size_t i = 0;
+	for (i = 0; i < ntotal; i++)
+		if (!(bitmap[i / 8] & (1 << (i % 8))))
+			printf("%zu ", i);
+	printf("\n");
+}
+
+static void detect_allocation_diffs(void)
+{
+	char *orig_block_bitmap;
+	char *orig_inode_bitmap;
+	uint64_t orig_block_ntotal;
+	uint64_t orig_inode_ntotal;
+
+	/* non-NULL would complicate destory+init+compare */
+	assert(!block_bitmap.allocs);
+	assert(!block_bitmap.frees);
+	assert(!inode_bitmap.allocs);
+	assert(!inode_bitmap.frees);
+
+	orig_block_bitmap = malloc(block_bitmap.ntotal / 8);
+	xassert(orig_block_bitmap);
+	memcpy(orig_block_bitmap, block_bitmap.bitmap, block_bitmap.ntotal / 8);
+	orig_block_ntotal = block_bitmap.ntotal;
+
+	orig_inode_bitmap = malloc(inode_bitmap.ntotal / 8);
+	xassert(orig_inode_bitmap);
+	memcpy(orig_inode_bitmap, inode_bitmap.bitmap, inode_bitmap.ntotal / 8);
+	orig_inode_ntotal = inode_bitmap.ntotal;
+
+	destroy_allocations();
+	init_allocations();
+
+	assert(orig_block_ntotal == block_bitmap.ntotal);
+	if (memcmp(orig_block_bitmap, block_bitmap.bitmap, block_bitmap.ntotal / 8))
+	{
+		printf("recorded free blocks (-1): ");
+		print_free_indices(orig_block_bitmap, block_bitmap.ntotal);
+		printf("detected free blocks (-1): ");
+		print_free_indices(block_bitmap.bitmap, block_bitmap.ntotal);
+		assert(0);
+	}
+
+	assert(orig_inode_ntotal == inode_bitmap.ntotal);
+	if (memcmp(orig_inode_bitmap, inode_bitmap.bitmap, inode_bitmap.ntotal / 8))
+	{
+		printf("recorded free inodes (-1): ");
+		print_free_indices(orig_inode_bitmap, inode_bitmap.ntotal);
+		printf("detected free inodes (-1): ");
+		print_free_indices(inode_bitmap.bitmap, inode_bitmap.ntotal);
+		assert(0);
+	}
+
+	free(orig_block_bitmap);
+	free(orig_inode_bitmap);
+}
+#endif
+
+static void bpfs_abort(void)
+{
+#if !SCSP_ENABLED
+	revert_superblock();
+#endif
+
+	abort_blocks();
+	abort_inodes();
+
+	detect_allocation_diffs();
+}
+
+static void bpfs_commit(void)
+{
+#if !SCSP_ENABLED
+	persist_superblock();
+#endif
+
+	commit_blocks();
+	commit_inodes();
+
+	detect_allocation_diffs();
 }
 
 
