@@ -2432,6 +2432,31 @@ static int callback_set_ctime(char *block, unsigned off,
 	return 0;
 }
 
+static int callback_change_nlinks(char *block, unsigned off,
+                                  struct bpfs_inode *inode, enum commit commit,
+                                  void *delta_void, uint64_t *blockno)
+{
+	int nlinks_delta = *(int*) delta_void;
+	uint64_t new_blockno = *blockno;
+
+	assert(commit != COMMIT_NONE);
+
+	if (commit != COMMIT_FREE)
+	{
+		new_blockno = cow_block_entire(new_blockno);
+		if (new_blockno == BPFS_BLOCKNO_INVALID)
+			return -ENOSPC;
+		block = get_block(new_blockno);
+	}
+	inode = (struct bpfs_inode*) (block + off);
+
+	assert(nlinks_delta >= 0 || inode->nlinks >= -nlinks_delta);
+	inode->nlinks += nlinks_delta;
+
+	*blockno = new_blockno;
+	return 0;
+}
+
 static void fuse_rename(fuse_req_t req,
                         fuse_ino_t src_parent_ino, const char *src_name,
                         fuse_ino_t dst_parent_ino, const char *dst_name)
@@ -2441,6 +2466,7 @@ static void fuse_rename(fuse_req_t req,
 	struct bpfs_time time_now = BPFS_TIME_NOW();
 	uint64_t invalid_ino = BPFS_INO_INVALID;
 	uint64_t unlinked_ino = BPFS_INO_INVALID;
+	bool dst_existed;
 	int r;
 
 	Dprintf("%s(src_parent_ino = %lu, src_name = '%s',"
@@ -2452,8 +2478,9 @@ static void fuse_rename(fuse_req_t req,
 		goto abort;
 
 	(void) find_dirent(dst_parent_ino, &dst_sd);
+	dst_existed = !!dst_sd.dirent;
 
-	if (dst_sd.dirent)
+	if (dst_existed)
 	{
 		// TODO: check that types match?
 		unlinked_ino = dst_sd.dirent->ino;
@@ -2493,9 +2520,28 @@ static void fuse_rename(fuse_req_t req,
 	r = crawl_inode(src_parent_ino, COMMIT_COPY, callback_set_cmtime, &time_now);
 	if (r < 0)
 		goto abort;
+
 	if (dst_sd.dirent->file_type == BPFS_TYPE_DIR)
 	{
-		// FIXME: need to change the ino for inode's ".."?
+		int nlinks_delta = -1;
+
+		r = crawl_inode(src_parent_ino, COMMIT_COPY,
+		                callback_change_nlinks, &nlinks_delta);
+		if (r < 0)
+			goto abort;
+		if (!dst_existed)
+		{
+			nlinks_delta = 1;
+			r = crawl_inode(dst_parent_ino, COMMIT_COPY,
+			                callback_change_nlinks, &nlinks_delta);
+			if (r < 0)
+				goto abort;
+		}
+
+		r = crawl_data(dst_parent_ino, 0, 1, COMMIT_COPY,
+		               callback_set_dirent_ino, &dst_parent_ino);
+		if (r < 0)
+			goto abort;
 		r = crawl_inode(dst_sd.dirent->ino, COMMIT_COPY,
 		                callback_set_ctime, &time_now);
 		if (r < 0)
