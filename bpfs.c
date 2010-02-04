@@ -33,6 +33,7 @@
 // - merge tree height and root block address
 // - accounting for subdirs in dir nlinks causes CoW
 // - storing ".." in a directory causes CoW
+// - write fsck.bpfs?: check .., check nlinks, more?
 
 // Set to 0 to use shadow paging, 1 to use short-circuit shadow paging
 #define SCSP_ENABLED 0
