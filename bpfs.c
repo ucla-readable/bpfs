@@ -469,7 +469,7 @@ static void tree_change_height(struct bpfs_tree_root *root, unsigned height_new)
 		root->addr = child_blockno;
 		root->height = height_new;
 	}
-	else if (height_new < root->height);
+	else if (height_new < root->height)
 	{
 		if (root->nbytes)
 		{
