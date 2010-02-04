@@ -1334,7 +1334,7 @@ static void discover_indir_allocations(struct bpfs_indir_block *indir,
 			if (no < lastno)
 				child_valid = child_max_nbytes;
 			else
-				child_valid = valid % child_max_nbytes;
+				child_valid = valid - no * child_max_nbytes;
 			discover_indir_allocations(child_indir, height - 1,
 			                           child_max_nblocks, child_valid);
 		}
