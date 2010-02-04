@@ -266,6 +266,7 @@ struct bitmap {
 	uint64_t nfree;
 	struct staged_entry *allocs;
 	struct staged_entry *frees;
+	uint64_t prev_ntotal;
 };
 
 static int bitmap_init(struct bitmap *bitmap, uint64_t ntotal)
@@ -280,6 +281,7 @@ static int bitmap_init(struct bitmap *bitmap, uint64_t ntotal)
 	memset(bitmap->bitmap, 0, size);
 	bitmap->nfree = bitmap->ntotal = ntotal;
 	bitmap->allocs = bitmap->frees = NULL;
+	bitmap->prev_ntotal = 0;
 	return 0;
 }
 
@@ -298,10 +300,24 @@ static int bitmap_resize(struct bitmap *bitmap, uint64_t ntotal)
 	if (bitmap->ntotal == ntotal)
 		return 0;
 
+#ifndef NDEBUG
+	if (bitmap->ntotal > ntotal)
+	{
+		uint64_t i;
+		assert(!(ntotal % (sizeof(uint64_t) * 8)));
+		assert(!(bitmap->ntotal % (sizeof(uint64_t) * 8)));
+		for (i = ntotal; i < bitmap->ntotal; i += sizeof(uintptr_t) * 8)
+			assert(!((uintptr_t*) bitmap->bitmap)[i / 8]);
+	}
+#endif
+
 	new_bitmap = realloc(bitmap->bitmap, ntotal);
 	if (!new_bitmap)
 		return -ENOMEM;
 	bitmap->bitmap = new_bitmap;
+
+	if (!bitmap->prev_ntotal)
+		bitmap->prev_ntotal = bitmap->ntotal;
 
 	if (bitmap->ntotal < ntotal)
 	{
@@ -312,9 +328,14 @@ static int bitmap_resize(struct bitmap *bitmap, uint64_t ntotal)
 	}
 	else
 	{
-		// TODO
-		// might want to check that no dropped items are allocated
-		xassert(0);
+		uint64_t delta = bitmap->ntotal - ntotal;
+
+		// easier if these are NULL
+		assert(!bitmap->allocs);
+		assert(!bitmap->frees);
+
+		bitmap->nfree -= delta;
+		bitmap->ntotal = ntotal;
 	}
 
 	return 0;
@@ -396,6 +417,15 @@ static void bitmap_abort(struct bitmap *bitmap)
 	}
 
 	staged_list_free(&bitmap->frees);
+
+	if (bitmap->prev_ntotal && bitmap->ntotal != bitmap->prev_ntotal)
+	{
+		uint64_t prev_ntotal = bitmap->prev_ntotal;
+		int r;
+		r = bitmap_resize(bitmap, prev_ntotal);
+		xassert(r >= 0); // TODO: recover
+	}
+	bitmap->prev_ntotal = 0;
 }
 
 static void bitmap_commit(struct bitmap *bitmap)
@@ -409,6 +439,8 @@ static void bitmap_commit(struct bitmap *bitmap)
 		bitmap->frees = bitmap->frees->next;
 		free(cur);
 	}
+
+	bitmap->prev_ntotal = 0;
 }
 
 
