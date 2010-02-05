@@ -1450,12 +1450,20 @@ static void detect_resource_diffs(void)
 {
 }
 #else
-static void print_free_indices(const char *bitmap, size_t ntotal)
+static void print_bitmap_differences(const char *name,
+                                     const char *orig_bitmap,
+                                     const char *disc_bitmap,
+                                     size_t size)
 {
-	size_t i = 0;
-	for (i = 0; i < ntotal; i++)
-		if (!(bitmap[i / 8] & (1 << (i % 8))))
-			printf("%zu ", i);
+	size_t i;
+	printf("%s bitmap differences (-1):", name);
+	for (i = 0; i < block_bitmap.ntotal; i++)
+	{
+		bool orig = !!(orig_bitmap[i / 8] & (1 << i % 8));
+		bool disc = !!(disc_bitmap[i / 8] & (1 << i % 8));
+		if (orig != disc)
+			printf(" %zu[%d]", i, disc);
+	}
 	printf("\n");
 }
 
@@ -1465,6 +1473,7 @@ static void detect_allocation_diffs(void)
 	char *orig_inode_bitmap;
 	uint64_t orig_block_ntotal;
 	uint64_t orig_inode_ntotal;
+	bool diff = false;
 
 	/* non-NULL would complicate destory+init+compare */
 	assert(!block_bitmap.allocs);
@@ -1488,22 +1497,22 @@ static void detect_allocation_diffs(void)
 	assert(orig_block_ntotal == block_bitmap.ntotal);
 	if (memcmp(orig_block_bitmap, block_bitmap.bitmap, block_bitmap.ntotal / 8))
 	{
-		printf("recorded free blocks (-1): ");
-		print_free_indices(orig_block_bitmap, block_bitmap.ntotal);
-		printf("detected free blocks (-1): ");
-		print_free_indices(block_bitmap.bitmap, block_bitmap.ntotal);
-		assert(0);
+		diff = true;
+		print_bitmap_differences("block",
+		                         orig_block_bitmap, block_bitmap.bitmap,
+		                         block_bitmap.ntotal);
 	}
 
 	assert(orig_inode_ntotal == inode_bitmap.ntotal);
 	if (memcmp(orig_inode_bitmap, inode_bitmap.bitmap, inode_bitmap.ntotal / 8))
 	{
-		printf("recorded free inodes (-1): ");
-		print_free_indices(orig_inode_bitmap, inode_bitmap.ntotal);
-		printf("detected free inodes (-1): ");
-		print_free_indices(inode_bitmap.bitmap, inode_bitmap.ntotal);
-		assert(0);
+		diff = true;
+		print_bitmap_differences("inodes",
+		                         orig_inode_bitmap, inode_bitmap.bitmap,
+		                         inode_bitmap.ntotal);
 	}
+
+	assert(!diff);
 
 	free(orig_block_bitmap);
 	free(orig_inode_bitmap);
