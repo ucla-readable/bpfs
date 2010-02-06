@@ -548,6 +548,9 @@ static uint64_t cow_block(uint64_t old_blockno,
 	char *new_block;
 	uint64_t end = off + size;
 
+	assert(off + size <= BPFS_BLOCK_SIZE);
+	assert(valid <= BPFS_BLOCK_SIZE);
+
 #if !SCSP_ENABLED
 	if (block_freshly_alloced(old_blockno))
 		return old_blockno;
