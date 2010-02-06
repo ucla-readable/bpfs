@@ -1445,7 +1445,7 @@ static void persist_superblock(void)
 #endif
 
 #if !DETECT_ALLOCATION_DIFFS
-static void detect_resource_diffs(void)
+static void detect_allocation_diffs(void)
 {
 }
 #else
