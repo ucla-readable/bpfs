@@ -5,7 +5,7 @@
 
 #define BPFS_FS_MAGIC 0xB9F5
 
-#define BPFS_STRUCT_VERSION 2
+#define BPFS_STRUCT_VERSION 3
 
 #define BPFS_BLOCK_SIZE 4096
 
@@ -69,7 +69,7 @@ struct bpfs_tree_root
 	uint64_t height; // : BPFS_TREE_MAX_HEIGHT; // #levels of indir blocks
 	uint64_t addr; // : sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT;
 	uint64_t nbytes;
-};
+} __attribute__((packed));
 
 
 struct bpfs_super
@@ -81,7 +81,7 @@ struct bpfs_super
 	enum commit_mode { BPFS_COMMIT_SP = 0, BPFS_COMMIT_SCSP } commit_mode;
 	uint64_t inode_root_addr; // block number containing the inode tree root
 	uint64_t inode_root_addr_2; // only used with SP; for commit consistency
-};
+} __attribute__((packed));
 
 
 #define BPFS_BLOCKNOS_PER_INDIR (BPFS_BLOCK_SIZE / sizeof(uint64_t))
@@ -89,14 +89,14 @@ struct bpfs_super
 struct bpfs_indir_block
 {
 	uint64_t addr[BPFS_BLOCKNOS_PER_INDIR];
-};
+} __attribute__((packed));
 
 
 struct bpfs_time
 {
 	uint32_t sec;
 //	uint32_t ns;
-};
+} __attribute__((packed));
 
 struct bpfs_inode
 {
@@ -110,7 +110,8 @@ struct bpfs_inode
 	struct bpfs_time mtime;
 	uint64_t flags;
 	struct bpfs_tree_root root;
-} __attribute__((aligned(128))); // pad to evenly fit in a block
+} __attribute__((packed))
+  __attribute__((aligned(128))); // pad to evenly fit in a block
 
 #define BPFS_INODES_PER_BLOCK (BPFS_BLOCK_SIZE / sizeof(struct bpfs_inode))
 
@@ -122,7 +123,7 @@ struct bpfs_dirent
 	uint8_t file_type;
 	uint8_t name_len;
 	char name[];
-};
+} __attribute__((packed));
 
 #define BPFS_DIRENT_ALIGN 8
 #define BPFS_DIRENT_MAX_NAME_LEN (BPFS_BLOCK_SIZE - sizeof(struct bpfs_dirent) - 1)
