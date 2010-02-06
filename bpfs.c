@@ -563,7 +563,7 @@ static uint64_t cow_block(uint64_t old_blockno,
 	old_block = get_block(old_blockno);
 	new_block = get_block(new_blockno);
 	memcpy(new_block, old_block, off);
-	if (off + size < valid)
+	if (end < valid)
 		memcpy(new_block + end, old_block + end, valid - end);
 	free_block(old_blockno);
 	return new_blockno;
@@ -1011,7 +1011,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
                       enum commit commit, crawl_callback callback, void *user,
                       uint64_t *prev_blockno)
 {
-	uint64_t height_required = tree_height((off + size + BPFS_BLOCK_SIZE - 1) / BPFS_BLOCK_SIZE);
+	uint64_t height_required = tree_height(NBLOCKS_FOR_NBYTES(off + size));
 	uint64_t new_blockno = *prev_blockno;
 	unsigned root_off = ((uintptr_t) root) % BPFS_BLOCK_SIZE;
 	uint64_t max_nblocks;
