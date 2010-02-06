@@ -1,5 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -g
+# Add optimizations:
+#CFLAGS += -O3 -DNDEBUG
 
 .PHONY: all clean
 
