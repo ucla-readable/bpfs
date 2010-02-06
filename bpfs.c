@@ -55,7 +55,7 @@
 // Max size that can be written atomically (hardcoded for unsafe 32b testing)
 #define ATOMIC_SIZE 8
 
-#define DEBUG 1
+#define DEBUG (1 && !defined(NDEBUG))
 #if DEBUG
 # define Dprintf(x...) fprintf(stderr, x)
 #else
@@ -374,10 +374,9 @@ static uint64_t bitmap_alloc(struct bitmap *bitmap)
 static void bitmap_free(struct bitmap *bitmap, uint64_t no)
 {
 	struct staged_entry *staged = malloc(sizeof(*staged));
-	char *word = bitmap->bitmap + no / 8;
 
 	assert(no < bitmap->ntotal);
-	assert(*word & (1 << (no % 8)));
+	assert(bitmap->bitmap[no / 8] & (1 << (no % 8)));
 	assert(!staged_list_freshly_alloced(bitmap->frees, no));
 
 	xassert(staged); // TODO/FIXME: recover
@@ -781,7 +780,7 @@ static int tree_change_height(struct bpfs_tree_root *root,
 		}
 		root_addr_new = child_blockno;
 	}
-	else if (height_new < root->height)
+	else
 	{
 		root_addr_new = root->addr;
 		if (root->nbytes)
@@ -3093,11 +3092,13 @@ static void destroy_persistent_bpram(void)
 
 static void init_ephemeral_bpram(size_t size)
 {
+	void *bpram_void = bpram; // convert &bpram to a void** without alias warn
 	int r;
 	assert(!bpram && !bpram_size);
 	// some code assumes block memory address are block aligned
-	r = posix_memalign((void**) &bpram, BPFS_BLOCK_SIZE, size);
+	r = posix_memalign(&bpram_void, BPFS_BLOCK_SIZE, size);
 	xassert(!r); // note: posix_memalign() returns positives on error
+	bpram = bpram_void;
 	bpram_size = size;
 	xcall(mkbpfs(bpram, bpram_size));
 }
@@ -3115,9 +3116,14 @@ static void destroy_ephemeral_bpram(void)
 
 void inform_pin_of_bpram(const char *bpram_addr, size_t size)
 {
-	// This function is empty. It exists to let the Pin tool bpramcount know:
+	// This function exists to let the Pin tool bpramcount know:
 	// 1) that bpfs has the address and size of bpram
 	// 2) the value of these two parameters
+
+	// This code exists to ensure that the compiler does not optimize
+	// away calls to this function. This syscall probably cannot be
+	// optimized away.
+	(void) getpid();
 }
 
 int main(int argc, char **argv)

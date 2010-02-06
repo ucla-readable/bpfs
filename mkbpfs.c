@@ -35,7 +35,6 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	struct bpfs_inode *inodes;
 	struct bpfs_inode *root_inode;
 	struct bpfs_dirent *root_dirent;
-	int i;
 
 	if (bpram_size < BPFS_MIN_NBLOCKS * BPFS_BLOCK_SIZE)
 		return -ENOSPC;
@@ -61,9 +60,12 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	inodes = (struct bpfs_inode*) GET_BLOCK(inodes_root->addr);
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 #ifndef NDEBUG
-	// init the generation field. not required, but appeases valgrind.
-	for (i = 0; i + sizeof(struct bpfs_inode) <= BPFS_BLOCK_SIZE; i += sizeof(struct bpfs_inode))
-		inodes[i].generation = 0;
+	{
+		// init the generation field. not required, but appeases valgrind.
+		int i;
+		for (i = 0; i + sizeof(struct bpfs_inode) <= BPFS_BLOCK_SIZE; i += sizeof(struct bpfs_inode))
+			inodes[i].generation = 0;
+	}
 #endif
 	static_assert(BPFS_INO_INVALID == 0);
 	memset(inodes, 0, inodes_root->nbytes);
