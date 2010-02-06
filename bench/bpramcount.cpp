@@ -41,9 +41,13 @@ VOID RecordMemWrite(VOID *ip, VOID *addr, ADDRINT size)
 
 VOID Instruction(INS ins, VOID *v)
 {
-    if (INS_IsMemoryWrite(ins))
+    // Checking !INS_IsIpRelWrite() does not seem to affect performance
+    if (INS_IsMemoryWrite(ins) && !INS_IsStackWrite(ins))
     {
-		// TODO: avoid insertion if ptr is static and not in range
+        // The Pin manual suggests dividing this into If and Then pieces
+        // to permit inlining of the If case, but I've found that If-Then
+        // is slower. Maybe if RecordMemWrite() becomes more expensive
+        // this tradeoff will change?
         INS_InsertPredicatedCall(
             ins, IPOINT_BEFORE, (AFUNPTR) RecordMemWrite,
             IARG_INST_PTR,
