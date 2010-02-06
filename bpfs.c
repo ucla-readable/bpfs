@@ -3110,6 +3110,13 @@ static void destroy_ephemeral_bpram(void)
 //
 // main
 
+void inform_pin_of_bpram(const char *bpram_addr, size_t size)
+{
+	// This function is empty. It exists to let the Pin tool bpramcount know:
+	// 1) that bpfs has the address and size of bpram
+	// 2) the value of these two parameters
+}
+
 int main(int argc, char **argv)
 {
 	void (*destroy_bpram)(void);
@@ -3172,6 +3179,8 @@ int main(int argc, char **argv)
 	staged_super = *bpfs_super;
 	bpfs_super = &staged_super;
 #endif
+
+	inform_pin_of_bpram(bpram, bpram_size);
 
 	xcall(init_allocations());
 
