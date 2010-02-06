@@ -34,6 +34,7 @@
 // - accounting for subdirs in dir nlinks causes CoW
 // - storing ".." in a directory causes CoW
 // - write fsck.bpfs?: check .., check nlinks, more?
+// - can compiler reorder memory writes? watch out for SP and SCSP.
 
 // Set to 0 to use shadow paging, 1 to use short-circuit shadow paging
 #define SCSP_ENABLED 0
