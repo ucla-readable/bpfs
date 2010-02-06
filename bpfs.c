@@ -274,8 +274,7 @@ struct bitmap {
 static int bitmap_init(struct bitmap *bitmap, uint64_t ntotal)
 {
 	size_t size = ntotal / 8;
-	xassert(!(ntotal % 8)); // simplifies resize
-	xassert(!(ntotal % 8 * sizeof(uintptr_t))); // makes search faster
+	xassert(!(ntotal % (8 * sizeof(char))));
 	assert(!bitmap->bitmap);
 	bitmap->bitmap = malloc(size);
 	if (!bitmap->bitmap)
@@ -308,8 +307,8 @@ static int bitmap_resize(struct bitmap *bitmap, uint64_t ntotal)
 		uint64_t i;
 		assert(!(ntotal % (sizeof(uint64_t) * 8)));
 		assert(!(bitmap->ntotal % (sizeof(uint64_t) * 8)));
-		for (i = ntotal; i < bitmap->ntotal; i += sizeof(uintptr_t) * 8)
-			assert(!((uintptr_t*) bitmap->bitmap)[i / 8]);
+		for (i = ntotal; i < bitmap->ntotal; i += sizeof(char) * 8)
+			assert(!((char*) bitmap->bitmap)[i / 8]);
 	}
 #endif
 
@@ -346,10 +345,10 @@ static int bitmap_resize(struct bitmap *bitmap, uint64_t ntotal)
 static uint64_t bitmap_alloc(struct bitmap *bitmap)
 {
 	uint64_t i;
-	for (i = 0; i < bitmap->ntotal; i += sizeof(uintptr_t) * 8)
+	for (i = 0; i < bitmap->ntotal; i += sizeof(unsigned char) * 8)
 	{
-		uintptr_t *word = (uintptr_t*) (bitmap->bitmap + i / 8);
-		if (*word != UINTPTR_MAX)
+		unsigned char *word = (unsigned char*) (bitmap->bitmap + i / 8);
+		if (*word != UINT8_MAX)
 		{
 			int j;
 			for (j = 0; j < sizeof(*word) * 8; j++)
