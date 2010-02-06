@@ -3116,6 +3116,9 @@ static void destroy_ephemeral_bpram(void)
 // main
 
 void inform_pin_of_bpram(const char *bpram_addr, size_t size)
+	__attribute__((noinline));
+
+void inform_pin_of_bpram(const char *bpram_addr, size_t size)
 {
 	// This function exists to let the Pin tool bpramcount know:
 	// 1) that bpfs has the address and size of bpram
