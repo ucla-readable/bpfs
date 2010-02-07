@@ -1,16 +1,18 @@
 #ifndef BPFS_STRUCTS_H
 #define BPFS_STRUCTS_H
 
+#include "util.h"
+
 #include <stdint.h>
 
 #define BPFS_FS_MAGIC 0xB9F5
 
-#define BPFS_STRUCT_VERSION 3
+#define BPFS_STRUCT_VERSION 4
 
 #define BPFS_BLOCK_SIZE 4096
 
 #define BPFS_BLOCKNO_INVALID 0
-/* 0 is BPFS_BLOCKNO_INVALID and 1 and 2 are super blocks */
+// 0 is BPFS_BLOCKNO_INVALID and 1 and 2 are super blocks
 #define BPFS_BLOCKNO_FIRST_ALLOC 3
 
 #define BPFS_INO_INVALID 0
@@ -69,8 +71,11 @@ struct bpfs_tree_root
 	uint64_t height; // : BPFS_TREE_MAX_HEIGHT; // #levels of indir blocks
 	uint64_t addr; // : sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT;
 	uint64_t nbytes;
-} __attribute__((packed));
+};
 
+// bpfs_super.commit_mode options:
+#define BPFS_COMMIT_SP 0
+#define BPFS_COMMIT_SCSP 1
 
 struct bpfs_super
 {
@@ -78,10 +83,11 @@ struct bpfs_super
 	uint32_t version;
 	uint8_t  uuid[16];
 	uint64_t nblocks;
-	enum commit_mode { BPFS_COMMIT_SP = 0, BPFS_COMMIT_SCSP } commit_mode;
 	uint64_t inode_root_addr; // block number containing the inode tree root
 	uint64_t inode_root_addr_2; // only used with SP; for commit consistency
-} __attribute__((packed));
+	uint8_t commit_mode;
+	uint8_t pad[4047]; // pad to full block
+};
 
 
 #define BPFS_BLOCKNOS_PER_INDIR (BPFS_BLOCK_SIZE / sizeof(uint64_t))
@@ -89,14 +95,14 @@ struct bpfs_super
 struct bpfs_indir_block
 {
 	uint64_t addr[BPFS_BLOCKNOS_PER_INDIR];
-} __attribute__((packed));
+};
 
 
 struct bpfs_time
 {
 	uint32_t sec;
 //	uint32_t ns;
-} __attribute__((packed));
+};
 
 struct bpfs_inode
 {
@@ -105,13 +111,13 @@ struct bpfs_inode
 	uint32_t uid;
 	uint32_t gid;
 	uint32_t nlinks;
+	uint64_t flags;
+	struct bpfs_tree_root root;
 	struct bpfs_time atime;
 	struct bpfs_time ctime;
 	struct bpfs_time mtime;
-	uint64_t flags;
-	struct bpfs_tree_root root;
-} __attribute__((packed))
-  __attribute__((aligned(128))); // pad to evenly fit in a block
+	uint8_t pad[60]; // pad to evenly fill a block
+};
 
 #define BPFS_INODES_PER_BLOCK (BPFS_BLOCK_SIZE / sizeof(struct bpfs_inode))
 
@@ -123,12 +129,28 @@ struct bpfs_dirent
 	uint8_t file_type;
 	uint8_t name_len;
 	char name[];
-} __attribute__((packed));
+} __attribute__((packed)); // pack rather than manually pad for char name[]
 
 #define BPFS_DIRENT_ALIGN 8
-#define BPFS_DIRENT_MAX_NAME_LEN (BPFS_BLOCK_SIZE - sizeof(struct bpfs_dirent) - 1)
+#define BPFS_DIRENT_MAX_NAME_LEN (BPFS_BLOCK_SIZE - sizeof(struct bpfs_dirent))
 #define BPFS_DIRENT_LEN(name_len) \
 	ROUNDUP64(sizeof(struct bpfs_dirent) + (name_len), BPFS_DIRENT_ALIGN)
 #define BPFS_DIRENT_MIN_LEN BPFS_DIRENT_LEN(0)
+
+
+// static_assert() must be used in a function, so declare one solely for this
+// purpose. It returns its own address to avoid an unused function warning.
+static void* __bpfs_structs_static_asserts(void)
+{
+	static_assert(!(sizeof(struct bpfs_tree_root) % 8));
+	static_assert(sizeof(struct bpfs_super) == BPFS_BLOCK_SIZE);
+	static_assert(sizeof(struct bpfs_indir_block) == BPFS_BLOCK_SIZE);
+	static_assert(sizeof(struct bpfs_time) == 4);
+	static_assert(sizeof(struct bpfs_inode) == 128); // fit evenly in a block
+	// struct bpfs_dirent itself does not have alignment restrictions
+	static_assert(sizeof(struct bpfs_dirent) == 12);
+	static_assert(!(BPFS_DIRENT_MIN_LEN % 8));
+	return __bpfs_structs_static_asserts;
+}
 
 #endif

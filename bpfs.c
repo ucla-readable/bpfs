@@ -56,6 +56,7 @@
 // Max size that can be written atomically (hardcoded for unsafe 32b testing)
 #define ATOMIC_SIZE 8
 
+
 #define DEBUG (1 && !defined(NDEBUG))
 #if DEBUG
 # define Dprintf(x...) fprintf(stderr, x)
@@ -1384,7 +1385,7 @@ static void destroy_allocations(void)
 #if !SCSP_ENABLED
 static int recover_superblock(void)
 {
-	struct bpfs_super *super_2 = (struct bpfs_super*) (((char*) bpfs_super) + BPFS_BLOCK_SIZE);
+	struct bpfs_super *super_2 = bpfs_super + 1;
 
 	if (bpfs_super->commit_mode == BPFS_COMMIT_SCSP)
 		return 0;
@@ -1418,7 +1419,7 @@ static void revert_superblock(void)
 
 static void persist_superblock(void)
 {
-	struct bpfs_super *persistent_super_2 = (struct bpfs_super*) (((char*) persistent_super) + BPFS_BLOCK_SIZE);
+	struct bpfs_super *persistent_super_2 = persistent_super + 1;
 
 	assert(bpfs_super == &staged_super);
 
@@ -1877,11 +1878,12 @@ static int callback_init_inode(char *block, unsigned off,
 	inode->uid = ciid->ctx->uid;
 	inode->gid = ciid->ctx->gid;
 	inode->nlinks = 1;
-	inode->mtime = inode->ctime = inode->atime = BPFS_TIME_NOW();
+	inode->flags = 0;
+	inode->root.addr = BPFS_BLOCKNO_INVALID;
 	inode->root.height = 0;
 	inode->root.nbytes = 0;
-	// TODO: flags
-	inode->root.addr = BPFS_BLOCKNO_INVALID;
+	inode->mtime = inode->ctime = inode->atime = BPFS_TIME_NOW();
+	memset(inode->pad, 0, sizeof(inode->pad));
 
 	*blockno = new_blockno;
 	return 0;
@@ -2049,7 +2051,7 @@ static void fuse_statfs(fuse_req_t req, fuse_ino_t ino)
 	stv.f_favail = stv.f_ffree; // NOTE: no space reserved for root
 	memset(&stv.f_fsid, 0, sizeof(stv.f_fsid)); // TODO: good enough?
 	stv.f_flag = 0; // TODO: check for flags (see mount(8))
-	stv.f_namemax = BPFS_DIRENT_MAX_NAME_LEN;
+	stv.f_namemax = BPFS_DIRENT_MAX_NAME_LEN - 1;
 
 	bpfs_commit();
 	xcall(fuse_reply_statfs(req, &stv));
@@ -2165,6 +2167,7 @@ static int callback_setattr(char *block, unsigned off,
 		if (r < 0)
 			return r;
 		assert(new_blockno == new_blockno2);
+
 	}
 	if (to_set & FUSE_SET_ATTR_ATIME)
 		inode->atime.sec = attr->st_atime;
@@ -2213,7 +2216,6 @@ static void fuse_readlink(fuse_req_t req, fuse_ino_t ino)
 	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
 
 	assert(BPFS_S_ISLNK(inode->mode));
-	static_assert(BPFS_DIRENT_MAX_NAME_LEN <= BPFS_BLOCK_SIZE);
 	assert(inode->root.nbytes <= BPFS_BLOCK_SIZE);
 
 	bpfs_commit();
@@ -3183,11 +3185,9 @@ int main(int argc, char **argv)
 	}
 
 #if SCSP_ENABLED
-	bpfs_super->commit_mode = BPFS_COMMIT_SCSP;
-	((struct bpfs_super*) (bpram + BPFS_BLOCK_SIZE))->commit_mode = BPFS_COMMIT_SCSP;
+	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SCSP;
 #else
-	bpfs_super->commit_mode = BPFS_COMMIT_SP;
-	((struct bpfs_super*) (bpram + BPFS_BLOCK_SIZE))->commit_mode = BPFS_COMMIT_SP;
+	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SP;
 	persistent_super = bpfs_super;
 	staged_super = *bpfs_super;
 	bpfs_super = &staged_super;

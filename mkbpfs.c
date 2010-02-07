@@ -30,7 +30,7 @@ static uint64_t alloc_block(struct bpfs_super *super)
 int mkbpfs(char *bpram, size_t bpram_size)
 {
 	struct bpfs_super *super;
-	struct bpfs_super *super2;
+	struct bpfs_super *super_2;
 	struct bpfs_tree_root *inodes_root;
 	struct bpfs_inode *inodes;
 	struct bpfs_inode *root_inode;
@@ -45,12 +45,13 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	static_assert(sizeof(uuid_t) == sizeof(super->uuid));
 	uuid_generate(super->uuid);
 	super->nblocks = bpram_size / BPFS_BLOCK_SIZE;
-	super->commit_mode = BPFS_COMMIT_SCSP;
 	super->inode_root_addr = alloc_block(super);
 	super->inode_root_addr_2 = super->inode_root_addr; // not required for SCSP
+	super->commit_mode = BPFS_COMMIT_SCSP;
+	memset(super->pad, 0, sizeof(super->pad));
 
-	super2 = (struct bpfs_super*) (bpram + BPFS_BLOCK_SIZE);
-	*super2 = *super; // not required for SCSP
+	super_2 = super + 1;
+	*super_2 = *super; // not required for SCSP
 
 	inodes_root = (struct bpfs_tree_root*) get_block(bpram, super, super->inode_root_addr);
 	inodes_root->addr = alloc_block(super);
@@ -77,11 +78,12 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	root_inode->uid = 0;
 	root_inode->gid = 0;
 	root_inode->nlinks = 2;
+	root_inode->flags = 0;
 	root_inode->root.addr = alloc_block(super);
 	root_inode->root.height = 0;
 	root_inode->root.nbytes = BPFS_BLOCK_SIZE;
 	root_inode->mtime = root_inode->ctime = root_inode->atime = BPFS_TIME_NOW();
-	// TODO: flags
+	memset(root_inode->pad, 0, sizeof(root_inode->pad));
 
 	root_dirent = (struct bpfs_dirent*) GET_BLOCK(root_inode->root.addr);
 	static_assert(BPFS_INO_INVALID == 0);
