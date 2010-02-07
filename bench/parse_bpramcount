@@ -12,23 +12,27 @@ ap = subprocess.Popen(['addr2line', '-f', '-e', bpfs],
 					  stdin=subprocess.PIPE,
 					  stdout=subprocess.PIPE)
 
-backtraces = False
+in_backtraces = False
+
+backtraces = []
 
 for line in sys.stdin:
 	line = line[:-1]
-	if (not backtraces):
+	if (not in_backtraces):
 		if (line == "write backtraces start:"):
-			backtraces = True
+			in_backtraces = True
 		continue
-	if (backtraces and line == "write backtraces end"):
-		backtraces = False
+	if (in_backtraces and line == "write backtraces end"):
+		in_backtraces = False
 		break
+
+	backtrace = []
 	
 	linelist = line.split()
 	nbytes = linelist[0]
 	ips = linelist[1:]
 
-	sys.stdout.write("%s" % nbytes)
+	backtrace.append(int(nbytes))
 
 	for ip in ips:
 		ap.stdin.write("%s\n" % ip)
@@ -37,5 +41,22 @@ for line in sys.stdin:
 		fileline = ap.stdout.readline()[:-1].split(':')
 		filename = fileline[0]
 		lineno = fileline[1]
-		sys.stdout.write(" %s:%s" % (function, lineno))
-	sys.stdout.write("\n")
+		backtrace.append("%s:%s" % (function, lineno))
+	backtraces.append(backtrace)
+
+def backtrace_sort(x, y):
+	if (x[0] > y[0]):
+		return 1
+	elif x[0] == y[0]:
+		return 0
+	else:
+		return -1
+
+backtraces.sort(backtrace_sort)
+backtraces.reverse()
+
+for backtrace in backtraces:
+	sys.stdout.write("%d" % backtrace[0])
+	for elt in backtrace[1:]:
+		sys.stdout.write(" %s" % elt)
+	sys.stdout.write('\n')
