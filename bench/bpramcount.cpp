@@ -127,11 +127,26 @@ VOID RecordMemWriteBacktrace(CONTEXT *ctxt, VOID *rip, ADDRINT size)
 		bt.ips[i++] = rip;
 	while (ebp >= last_ebp && i < NBSTEPS)
 	{
-		if (!ebp[1])
+		void *ebp_1;
+		void *ebp_0;
+		size_t n;
+		n = PIN_SafeCopy(&ebp_1, ebp + 1, sizeof(ebp_1));
+		if (!n)
+		{
+			printf("pin: st failed at depth %d\n", i);
 			break;
-		bt.ips[i++] = ebp[1];
+		}
+		if (!ebp_1)
+			break;
+		bt.ips[i++] = ebp_1;
 		last_ebp = ebp;
-		ebp = reinterpret_cast<void**>(*ebp);
+		n = PIN_SafeCopy(&ebp_0, ebp, sizeof(ebp_0));
+		if (!n)
+		{
+			printf("pin: st failed at depth %d\n", i);
+			break;
+		}
+		ebp = reinterpret_cast<void**>(ebp_0);
 	}
 
 	backtrace_writes::iterator it = bt_writes.find(bt);
