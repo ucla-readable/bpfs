@@ -26,7 +26,7 @@
 // - tell valgrind about block and inode alloc and free functions
 // - merge and breakup empty dirents
 // - remember that atomic 64b writes will only be atomic on 64b systems?
-// - add epoch barrier function? don't reuse inflight resources?
+// - don't reuse inflight resources? (work with epoch_barrier()?)
 // - change memcpy() calls to only do atomic writes if size is aligned
 // - change read/crawl code to return zero block for unallocated blocks?
 //   (ie because of a tree height increase)
@@ -56,6 +56,10 @@
 // Max size that can be written atomically (hardcoded for unsafe 32b testing)
 #define ATOMIC_SIZE 8
 
+
+// Use this macro to ensure that memory writes are made inbetween calls to
+// this macro. With hardware support this would also issue an epoch barrier.
+#define epoch_barrier() __asm__ __volatile__("": : :"memory")
 
 #define DEBUG (1 && !defined(NDEBUG))
 #if DEBUG
@@ -1433,6 +1437,7 @@ static void persist_superblock(void)
 	staged_super.inode_root_addr_2        = staged_super.inode_root_addr;
 	persistent_super->inode_root_addr     = staged_super.inode_root_addr;
 	persistent_super->inode_root_addr_2   = staged_super.inode_root_addr;
+	epoch_barrier(); // keep at least one SB consistent during each update
 	persistent_super_2->inode_root_addr   = staged_super.inode_root_addr;
 	persistent_super_2->inode_root_addr_2 = staged_super.inode_root_addr;
 
