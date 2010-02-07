@@ -65,9 +65,11 @@
 	})
 
 // 64-bit integer rounding; only works for n = power of two
-#define ROUNDUP64(a, n) \
-    ({ uint64_t __n = (n);  (((uint64_t) (a) + __n - 1) & ~(__n - 1)); })
-#define ROUNDDOWN64(a, n)   (((uint64_t) (a)) & ~((n) - 1))
+// NOTE: ROUNDUP64() may eval n twice. This macro does not create a variable
+// on the stack to avoid this because it prevents gcc from being able
+// to evaluate the resulting expression at compile time.
+#define ROUNDUP64(a, n)   (((uint64_t) (a) + n - 1) & ~(n - 1))
+#define ROUNDDOWN64(a, n) (((uint64_t) (a)) & ~((n) - 1))
 
 #define NBLOCKS_FOR_NBYTES(nbytes) \
 	(((nbytes) + BPFS_BLOCK_SIZE - 1) / BPFS_BLOCK_SIZE)
