@@ -35,6 +35,7 @@
 // - storing ".." in a directory causes CoW
 // - write fsck.bpfs?: check .., check nlinks, more?
 // - can compiler reorder memory writes? watch out for SP and SCSP.
+// - make idea of tree height uniform and fix append/truncate/valid
 
 // Set to 0 to use shadow paging, 1 to use short-circuit shadow paging
 #define SCSP_ENABLED 0
@@ -874,7 +875,7 @@ static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
 	assert(off + size <= BPFS_BLOCK_SIZE);
 	assert(valid <= BPFS_BLOCK_SIZE);
 
-	if (blockno == BPFS_BLOCKNO_INVALID)
+	if (!valid || blockno == BPFS_BLOCKNO_INVALID)
 	{
 		assert(commit != COMMIT_NONE);
 		if ((blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
@@ -1054,7 +1055,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
                       enum commit commit, crawl_callback callback, void *user,
                       uint64_t *prev_blockno)
 {
-	uint64_t height_required = tree_height(NBLOCKS_FOR_NBYTES(off + size));
+	uint64_t height_required;
 	uint64_t new_blockno = *prev_blockno;
 	unsigned root_off = block_offset(root);
 	uint64_t max_nblocks;
@@ -1067,6 +1068,8 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 		off = root->nbytes;
 	if (size == BPFS_EOF)
 		size = root->nbytes - off;
+
+	height_required = tree_height(NBLOCKS_FOR_NBYTES(off + size));
 
 	if (root->height < height_required)
 	{
@@ -2168,16 +2171,16 @@ static int callback_setattr(char *block, unsigned off,
 		// TODO: expand file if attr->st_size > inode->root.nbytes
 		// probably do this on the read side (detect empty blocks)
 
-		inode->root.nbytes = attr->st_size;
-
 		// TODO: change FREE to ATOMIC as part of optimizing to COW
 		// TODO: free blocks not along the trunk (or already happening?)
-		r = tree_change_height(&inode->root, tree_height(attr->st_size),
+		r = tree_change_height(&inode->root,
+		                       tree_height(NBLOCKS_FOR_NBYTES(attr->st_size)),
 		                       COMMIT_FREE, &new_blockno2);
 		if (r < 0)
 			return r;
 		assert(new_blockno == new_blockno2);
 
+		inode->root.nbytes = attr->st_size;
 	}
 	if (to_set & FUSE_SET_ATTR_ATIME)
 		inode->atime.sec = attr->st_atime;
