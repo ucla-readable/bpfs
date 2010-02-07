@@ -8,8 +8,16 @@
 #include <inttypes.h>
 #include "pin.H"
 
+#include <ext/hash_map>
+
 
 #define BPRAM_INFO "inform_pin_of_bpram"
+
+// Max backtrace depth
+#define NBSTEPS 15
+
+// Whether to log each write
+#define LOG_WRITES 0
 
 
 const void *bpram_start;
@@ -17,16 +25,19 @@ const void *bpram_end;
 
 UINT64 nbytes;
 
-#define LOG_WRITES 0
+FILE *trace;
 
-#if LOG_WRITES
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE, "pintool",
 	"o", "bpramcount.out", "specify output file name");
-FILE *trace;
-#endif
+
+KNOB<string> KnobBacktrace(KNOB_MODE_WRITEONCE, "pintool",
+	"b", "false", "specify whether to log write backtraces: true/false");
 
 
-VOID RecordMemWrite(VOID *ip, VOID *addr, ADDRINT size)
+//
+// Log the number of bytes written to BPRAM
+
+VOID RecordMemWrite(VOID *addr, ADDRINT size)
 {
 	if (bpram_start <= addr && addr < bpram_end)
 	{
@@ -34,7 +45,7 @@ VOID RecordMemWrite(VOID *ip, VOID *addr, ADDRINT size)
 #if LOG_WRITES
 		// TODO: Log to memory instead of file; output to file at exit.
 		//       Perhaps structure the stats per IP, rather than as a log.
-	    fprintf(trace,"%p: %p %zu\n", ip, addr, size);
+	    fprintf(trace,"%zu B to %p\n", size, addr);
 #endif
 	}
 }
@@ -50,30 +61,133 @@ VOID Instruction(INS ins, VOID *v)
         // this tradeoff will change?
         INS_InsertPredicatedCall(
             ins, IPOINT_BEFORE, (AFUNPTR) RecordMemWrite,
-            IARG_INST_PTR,
             IARG_MEMORYWRITE_EA,
             IARG_MEMORYWRITE_SIZE,
             IARG_END);
     }
 }
 
+
+//
+// Log the number of bytes written to BPRAM and the backtrace for each write
+
+struct backtrace
+{
+	backtrace() { memset(ips, 0, sizeof(ips)); }
+	void *ips[NBSTEPS];
+};
+
+bool operator==(const backtrace &bt1, const backtrace &bt2)
+{
+	return !memcmp(bt1.ips, bt2.ips, sizeof(bt1.ips));
+}
+
+struct backtrace_hash : public std::unary_function<backtrace,size_t>
+{
+	size_t operator()(const backtrace &b) const
+	{
+		// uses FNV hash taken from Anvil from stl::tr1::hash
+		size_t r = 2166136261u;
+		for (size_t i = 0; i < NBSTEPS; i++)
+		{
+			r ^= reinterpret_cast<uintptr_t>(b.ips[i]);
+			r *= 16777619;
+		}
+		return r;
+	}
+};
+
+typedef __gnu_cxx::hash_map<backtrace,UINT64,backtrace_hash> backtrace_writes;
+
+backtrace_writes bt_writes;
+
+
+ADDRINT BpramWriteIf(VOID *addr)
+{
+	return (bpram_start <= addr && addr < bpram_end);
+}
+
+VOID RecordMemWriteBacktrace(CONTEXT *ctxt, VOID *rip, ADDRINT size)
+{
+	void **ebp = reinterpret_cast<void**>(PIN_GetContextReg(ctxt, REG_EBP));
+	void **last_ebp = NULL;
+	backtrace bt;
+	int i = 0;
+
+	nbytes += size;
+
+	bt.ips[0] = reinterpret_cast<void*>(PIN_GetContextReg(ctxt, REG_INST_PTR));
+	if (rip)
+		bt.ips[i++] = rip;
+	while (ebp >= last_ebp && i < NBSTEPS)
+	{
+		if (!ebp[1])
+			break;
+		bt.ips[i++] = ebp[1];
+		last_ebp = ebp;
+		ebp = reinterpret_cast<void**>(*ebp);
+	}
+
+	backtrace_writes::iterator it = bt_writes.find(bt);
+	if (it != bt_writes.end())
+		it->second += size;
+	else
+		bt_writes[bt] = size;
+}
+
+VOID InstructionWithBacktrace(INS ins, VOID *v)
+{
+    // Checking !INS_IsIpRelWrite() does not seem to affect performance
+    if (INS_IsMemoryWrite(ins) && !INS_IsStackWrite(ins))
+    {
+        INS_InsertIfPredicatedCall(
+            ins, IPOINT_BEFORE, (AFUNPTR) BpramWriteIf,
+            IARG_MEMORYWRITE_EA,
+            IARG_END);
+        INS_InsertThenPredicatedCall(
+            ins, IPOINT_BEFORE, (AFUNPTR) RecordMemWriteBacktrace,
+			IARG_CONTEXT,
+			IARG_RETURN_IP,
+            IARG_MEMORYWRITE_SIZE,
+            IARG_END);
+    }
+}
+
+
+//
+// General
+
 VOID Fini(INT32 code, VOID *v)
 {
 	printf("pin: %" PRIu64 " bytes written to BPRAM\n", nbytes);
-#if LOG_WRITES
-	fprintf(trace, "number of bytes written: %" PRIu64 "\n", nbytes);
-    fclose(trace);
-#endif
+
+	if (trace)
+	{
+		fprintf(trace, "total number of bytes written: %" PRIu64 "\n", nbytes);
+
+		fprintf(trace, "write backtraces start:\n");
+		for (backtrace_writes::const_iterator it = bt_writes.begin();
+		     it != bt_writes.end();
+		     ++it)
+		{
+			fprintf(trace, "%" PRIu64, it->second);
+			for (int i = 0; i < NBSTEPS && it->first.ips[i]; i++)
+				fprintf(trace, " %p", it->first.ips[i]);
+			fprintf(trace, "\n");
+		}
+		fprintf(trace, "write backtraces end\n");
+
+		fclose(trace);
+	}
 }
 
 VOID InformPinBpramBefore(ADDRINT addr, ADDRINT size)
 {
 	printf("pin: detected %zu MiB (%zu bytes) of BPRAM\n",
 	       size / (1024 * 1024), size);
-#if LOG_WRITES
-	fprintf(trace, "detected %zu MiB (%zu bytes) of BPRAM @ %p\n",
-	       size / (1024 * 1024), size, (void*) addr);
-#endif
+	if (trace)
+		fprintf(trace, "detected %zu MiB (%zu bytes) of BPRAM @ %p\n",
+		        size / (1024 * 1024), size, (void*) addr);
 	bpram_start = (void*) addr;
 	bpram_end = (void*) (addr + size);
 }
@@ -103,12 +217,24 @@ int main(int argc, char **argv)
 	PIN_InitSymbols();
     PIN_Init(argc, argv);
 
-#if LOG_WRITES
-    trace = fopen(KnobOutputFile.Value().c_str(), "w");
-#endif
-
 	IMG_AddInstrumentFunction(Image, 0);
-    INS_AddInstrumentFunction(Instruction, 0);
+	if (KnobBacktrace.Value() == "true")
+	{
+		trace = fopen(KnobOutputFile.Value().c_str(), "w");
+		if (!trace)
+			fprintf(stderr, "pin: unable to open trace file\n");
+		INS_AddInstrumentFunction(InstructionWithBacktrace, 0);
+	}
+	else
+		INS_AddInstrumentFunction(Instruction, 0);
+#if LOG_WRITES
+	if (!trace)
+	{
+		trace = fopen(KnobOutputFile.Value().c_str(), "w");
+		if (!trace)
+			fprintf(stderr, "pin: unable to open trace file\n");
+	}
+#endif
     PIN_AddFiniFunction(Fini, 0);
 
     PIN_StartProgram(); // does not return

@@ -1,0 +1,40 @@
+#!/usr/bin/env python
+# Print a bpramcount log with function names in place of instruction pointers
+# NOTE: addr2line only seems useful when bpfs is compiled with -O0
+
+import subprocess
+import sys
+import os
+
+bpfs = os.path.dirname(sys.argv[0]) + '/../bpfs'
+
+ap = subprocess.Popen(['addr2line', '-f', '-e', bpfs],
+					  stdin=subprocess.PIPE,
+					  stdout=subprocess.PIPE)
+
+backtraces = False
+
+for line in sys.stdin:
+	line = line[:-1]
+	if (not backtraces):
+		if (line == "write backtraces start:"):
+			backtraces = True
+		continue
+	if (backtraces and line == "write backtraces end"):
+		backtraces = False
+	
+	linelist = line.split()
+	nbytes = linelist[0]
+	ips = linelist[1:]
+
+	sys.stdout.write("%s" % nbytes)
+
+	for ip in ips:
+		ap.stdin.write("%s\n" % ip)
+		ap.stdin.flush()
+		function = ap.stdout.readline()[:-1]
+		fileline = ap.stdout.readline()[:-1].split(':')
+		filename = fileline[0]
+		lineno = fileline[1]
+		sys.stdout.write(" %s:%s" % (function, lineno))
+	sys.stdout.write("\n")
