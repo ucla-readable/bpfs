@@ -107,9 +107,15 @@ ADDRINT BpramWriteIf(VOID *addr)
 	return (bpram_start <= addr && addr < bpram_end);
 }
 
+#ifdef __i386__
+# define REG_BP_ARCH REG_EBP
+#elif defined(__x86_64__)
+# define REG_BP_ARCH REG_RBP
+#endif
+
 VOID RecordMemWriteBacktrace(CONTEXT *ctxt, VOID *rip, ADDRINT size)
 {
-	void **ebp = reinterpret_cast<void**>(PIN_GetContextReg(ctxt, REG_EBP));
+	void **ebp = reinterpret_cast<void**>(PIN_GetContextReg(ctxt, REG_BP_ARCH));
 	void **last_ebp = NULL;
 	backtrace bt;
 	int i = 0;
