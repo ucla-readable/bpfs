@@ -257,6 +257,8 @@ int main(int argc, char **argv)
 	}
 #endif
     PIN_AddFiniFunction(Fini, 0);
+	if (trace)
+		printf("pin: logging to %s\n", KnobOutputFile.Value().c_str());
 
     PIN_StartProgram(); // does not return
     return 0;
