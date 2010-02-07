@@ -5,6 +5,8 @@ DIR="`dirname "$0"`"
 
 PIN=$DIR/pin/pin
 
+PINOPTS=${PINOPTS:-}
+
 if [ ! -d $DIR/pin ]; then
 	echo "Pin not found at $DIR/pin/." 1>&2
 	echo "Pin is available from http://www.pintool.org/." 1>&2
@@ -27,4 +29,4 @@ if [ ! -f "$TOOL" ]; then
 	exit 1
 fi
 
-exec $PIN -t $TOOL -- $DIR/../bpfs $@
+exec $PIN -t $TOOL $PINOPTS -- $DIR/../bpfs $@
