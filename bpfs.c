@@ -738,6 +738,44 @@ static struct bpfs_inode* get_inode(uint64_t ino)
 
 
 //
+// misc internal functions
+
+static uint64_t bpram_blockno(const void *x)
+{
+	const char *c = (const char*) x;
+	if (c < bpram || bpram + bpram_size <= c)
+		return BPFS_BLOCKNO_INVALID;
+	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	return (((uintptr_t) (c - bpram)) / BPFS_BLOCK_SIZE) + 1;
+}
+
+static int bpfs_stat(fuse_ino_t ino, struct stat *stbuf)
+{
+	struct bpfs_inode *inode = get_inode(ino);
+	if (!inode)
+		return -ENOENT;
+	memset(stbuf, 0, sizeof(stbuf));
+	stbuf->st_ino = ino;
+	stbuf->st_nlink = inode->nlinks;
+	stbuf->st_mode = b2f_mode(inode->mode);
+	stbuf->st_uid = inode->uid;
+	stbuf->st_gid = inode->gid;
+	stbuf->st_size = inode->root.nbytes;
+	stbuf->st_blocks = NBLOCKS_FOR_NBYTES(inode->root.nbytes)
+	                   * BPFS_BLOCK_SIZE / 512;
+	stbuf->st_atime = inode->atime.sec;
+	stbuf->st_mtime = inode->mtime.sec;
+	stbuf->st_ctime = inode->ctime.sec;
+	return 0;
+}
+
+static unsigned block_offset(const void *x)
+{
+	return ((uintptr_t) x) % BPFS_BLOCK_SIZE;
+}
+
+
+//
 // tree functions
 
 static uint64_t tree_max_nblocks(uint64_t height)
@@ -806,7 +844,7 @@ static int tree_change_height(struct bpfs_tree_root *root,
 	// TODO: merge tree root height and addr fields to permit atomic change
 	if (commit == COMMIT_COPY || commit == COMMIT_ATOMIC)
 	{
-		unsigned root_off = ((uintptr_t) root) % BPFS_BLOCK_SIZE;
+		unsigned root_off = block_offset(root);
 		uint64_t new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
@@ -1018,7 +1056,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 {
 	uint64_t height_required = tree_height(NBLOCKS_FOR_NBYTES(off + size));
 	uint64_t new_blockno = *prev_blockno;
-	unsigned root_off = ((uintptr_t) root) % BPFS_BLOCK_SIZE;
+	unsigned root_off = block_offset(root);
 	uint64_t max_nblocks;
 	uint64_t child_new_blockno;
 	enum commit child_commit;
@@ -1092,7 +1130,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 			}
 			if (!inplace)
 			{
-				unsigned root_off = ((uintptr_t) root) % BPFS_BLOCK_SIZE;
+				unsigned root_off = block_offset(root);
 				new_blockno = cow_block_entire(new_blockno);
 				if (new_blockno == BPFS_BLOCKNO_INVALID)
 					return -ENOSPC;
@@ -1549,39 +1587,6 @@ static void bpfs_commit(void)
 	commit_inodes();
 
 	detect_allocation_diffs();
-}
-
-
-//
-// misc internal functions
-
-static uint64_t bpram_blockno(const void *x)
-{
-	const char *c = (const char*) x;
-	if (c < bpram || bpram + bpram_size <= c)
-		return BPFS_BLOCKNO_INVALID;
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
-	return (((uintptr_t) (c - bpram)) / BPFS_BLOCK_SIZE) + 1;
-}
-
-static int bpfs_stat(fuse_ino_t ino, struct stat *stbuf)
-{
-	struct bpfs_inode *inode = get_inode(ino);
-	if (!inode)
-		return -ENOENT;
-	memset(stbuf, 0, sizeof(stbuf));
-	stbuf->st_ino = ino;
-	stbuf->st_nlink = inode->nlinks;
-	stbuf->st_mode = b2f_mode(inode->mode);
-	stbuf->st_uid = inode->uid;
-	stbuf->st_gid = inode->gid;
-	stbuf->st_size = inode->root.nbytes;
-	stbuf->st_blocks = NBLOCKS_FOR_NBYTES(inode->root.nbytes)
-	                   * BPFS_BLOCK_SIZE / 512;
-	stbuf->st_atime = inode->atime.sec;
-	stbuf->st_mtime = inode->mtime.sec;
-	stbuf->st_ctime = inode->ctime.sec;
-	return 0;
 }
 
 
@@ -3081,7 +3086,7 @@ static void init_persistent_bpram(const char *filename)
 	bpram = mmap(NULL, bpram_size, PROT_READ | PROT_WRITE, MAP_SHARED, bpram_fd, 0);
 	xassert(bpram);
 	// some code assumes block memory address are block aligned
-	xassert(!(((uintptr_t) bpram) % BPFS_BLOCK_SIZE));
+	xassert(!block_offset(bpram));
 }
 
 static void destroy_persistent_bpram(void)
