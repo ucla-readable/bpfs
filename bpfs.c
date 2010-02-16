@@ -35,7 +35,7 @@
 // - storing ".." in a directory causes CoW
 // - write fsck.bpfs?: check .., check nlinks, more?
 // - can compiler reorder memory writes? watch out for SP and SCSP.
-// - make idea of tree height uniform and fix append/truncate/valid
+// - fix truncate to larger size/valid
 
 // Set to 0 to use shadow paging, 1 to use short-circuit shadow paging
 #define SCSP_ENABLED 0
@@ -834,9 +834,8 @@ static int tree_change_height(struct bpfs_tree_root *root,
 			while (height_delta--)
 			{
 				struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root_addr_new);
-				uint64_t tmp = indir->addr[0];
-				free_block(root_addr_new);
-				root_addr_new = tmp;
+				// truncate_block_free() has already freed the block
+				root_addr_new = indir->addr[0];
 			}
 		}
 	}
@@ -875,7 +874,8 @@ static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
 	assert(off + size <= BPFS_BLOCK_SIZE);
 	assert(valid <= BPFS_BLOCK_SIZE);
 
-	if (!valid || blockno == BPFS_BLOCKNO_INVALID)
+	assert(!valid == (blockno == BPFS_BLOCKNO_INVALID));
+	if (blockno == BPFS_BLOCKNO_INVALID)
 	{
 		assert(commit != COMMIT_NONE);
 		if ((blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
@@ -1029,11 +1029,16 @@ static void crawl_blocknos(struct bpfs_tree_root *root,
                            uint64_t off, uint64_t size,
                            crawl_blockno_callback callback)
 {
+	assert(off + size <= root->nbytes);
+
 	/* convenience */
 	if (off == BPFS_EOF)
 		off = root->nbytes;
 	if (size == BPFS_EOF)
 		size = root->nbytes - off;
+
+	if (!(off + size))
+		return;
 
 	if (!root->height)
 	{
@@ -1079,7 +1084,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 			return r;
 		root = (struct bpfs_tree_root*) (get_block(new_blockno) + root_off);
 	}
-	child_new_blockno = root->addr;
+	child_new_blockno = root->nbytes ? root->addr : BPFS_BLOCKNO_INVALID;
 	max_nblocks = tree_max_nblocks(root->height);
 
 	if (commit == COMMIT_NONE)
@@ -1098,7 +1103,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	{
 		assert(off + size <= BPFS_BLOCK_SIZE);
 		if (size)
-			r = crawl_leaf(root->addr, 0, off, size, root->nbytes, off,
+			r = crawl_leaf(child_new_blockno, 0, off, size, root->nbytes, off,
 			               child_commit, callback, user, NULL,
 			               &child_new_blockno);
 		else
@@ -1106,7 +1111,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	}
 	else
 	{
-		r = crawl_indir(root->addr, off / BPFS_BLOCK_SIZE,
+		r = crawl_indir(child_new_blockno, off / BPFS_BLOCK_SIZE,
 		                off, size, root->nbytes,
                         off, child_commit, root->height, max_nblocks,
 		                callback, user, NULL, &child_new_blockno);
