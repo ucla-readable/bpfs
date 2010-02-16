@@ -2200,7 +2200,20 @@ static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 	int r;
 	UNUSED(fi);
 
-	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
+	Dprintf("%s(ino = %lu, set =", __FUNCTION__, ino);
+	if (to_set & FUSE_SET_ATTR_MODE)
+		Dprintf(" mode");
+	if (to_set & FUSE_SET_ATTR_UID)
+		Dprintf(" uid");
+	if (to_set & FUSE_SET_ATTR_GID)
+		Dprintf(" gid");
+	if (to_set & FUSE_SET_ATTR_SIZE)
+		Dprintf(" size(to %" PRId64 ")", attr->st_size);
+	if (to_set & FUSE_SET_ATTR_ATIME)
+		Dprintf(" atime");
+	if (to_set & FUSE_SET_ATTR_MTIME)
+		Dprintf(" mtime");
+	Dprintf(")\n");
 
 	// Why are bits 6, 7, and 8 set?
 	// in fuse 2.8.1, 7 is atime_now and 8 is mtime_now. 6 is skipped.
