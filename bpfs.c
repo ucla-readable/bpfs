@@ -827,16 +827,13 @@ static int tree_change_height(struct bpfs_tree_root *root,
 	}
 	else
 	{
+		unsigned height_delta = root->height - height_new;
 		root_addr_new = root->addr;
-		if (root->nbytes)
+		while (height_delta--)
 		{
-			unsigned height_delta = root->height - height_new;
-			while (height_delta--)
-			{
-				struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root_addr_new);
-				// truncate_block_free() has already freed the block
-				root_addr_new = indir->addr[0];
-			}
+			struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root_addr_new);
+			// truncate_block_free() has already freed the block
+			root_addr_new = indir->addr[0];
 		}
 	}
 
@@ -2131,6 +2128,129 @@ static void fuse_getattr(fuse_req_t req, fuse_ino_t ino,
 	xcall(fuse_reply_attr(req, &stbuf, STDTIMEOUT));
 }
 
+static int truncate_block_zero_leaf(uint64_t prev_blockno,
+                                    uint64_t valid, uint64_t new_size,
+                                    uint64_t *new_blockno)
+{
+	uint64_t blockno = prev_blockno;
+	char *block;
+
+	assert(valid < new_size);
+	assert(new_size <= BPFS_BLOCK_SIZE);
+
+#if !COW_OPT
+	if ((blockno = cow_block(blockno, 0, 0, valid)) == BPFS_BLOCKNO_INVALID)
+		return -ENOSPC;
+#endif
+	block = get_block(blockno);
+
+	memset(block + valid, 0, new_size - valid);
+
+	*new_blockno = blockno;
+	return 0;
+}
+
+static int truncate_block_zero_indir(uint64_t prev_blockno,
+                                     uint64_t valid, uint64_t new_size,
+                                     unsigned height, uint64_t max_nblocks,
+                                     uint64_t *new_blockno)
+{
+	uint64_t blockno = prev_blockno;
+	struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(blockno);
+	uint64_t child_max_nblocks = max_nblocks / BPFS_BLOCKNOS_PER_INDIR;
+	uint64_t lastno = (valid - 1) / (BPFS_BLOCK_SIZE * child_max_nblocks);
+	bool last_partial = !(valid % (BPFS_BLOCK_SIZE * child_max_nblocks));
+	uint64_t new_lastno = (new_size - 1) / (BPFS_BLOCK_SIZE * child_max_nblocks);
+	uint64_t no;
+
+	assert(valid);
+	assert(valid < new_size);
+	assert(new_size <= BPFS_BLOCK_SIZE * max_nblocks);
+
+#if !COW_OPT
+	{
+		unsigned indir_valid = (lastno + 1) * sizeof(*indir);
+		if ((blockno = cow_block(blockno, 0, 0, indir_valid)) == BPFS_BLOCKNO_INVALID)
+			return -ENOSPC;
+		indir = (struct bpfs_indir_block*) get_block(blockno);
+	}
+#endif
+
+	for (no = lastno + 1; no <= new_lastno; no++)
+		if (indir->addr[no] != BPFS_BLOCKNO_INVALID)
+			indir->addr[no] = BPFS_BLOCKNO_INVALID;
+
+	if (last_partial && indir->addr[lastno] != BPFS_BLOCKNO_INVALID)
+	{
+		uint64_t child_max_nbytes = child_max_nblocks * BPFS_BLOCK_SIZE;
+		uint64_t child_valid = valid - lastno * child_max_nbytes;
+		uint64_t child_new_size = MIN(new_size - lastno * child_max_nbytes,
+		                              child_max_nbytes);
+		uint64_t child_blockno = indir->addr[lastno];
+		int r;
+
+		if (height > 1)
+			r = truncate_block_zero_indir(child_blockno, child_valid,
+			                              child_new_size, height - 1,
+			                              child_max_nblocks, &child_blockno);
+		else
+			r = truncate_block_zero_leaf(child_blockno, child_valid,
+			                             child_new_size, &child_blockno);
+		if (r < 0)
+			return r;
+
+		if (indir->addr[lastno] != child_blockno)
+			indir->addr[lastno] = child_blockno;
+	}
+
+	*new_blockno = blockno;
+	return 0;
+}
+
+static int truncate_block_zero(struct bpfs_tree_root *root, uint64_t new_size,
+			                   uint64_t *blockno)
+{
+	uint64_t new_blockno = *blockno;
+	unsigned root_off = block_offset(root);
+	uint64_t max_nblocks = tree_max_nblocks(root->height);
+	uint64_t child_blockno = root->addr;
+
+	assert(root->nbytes < new_size);
+
+	new_size = MIN(new_size, max_nblocks * BPFS_BLOCK_SIZE);
+
+	if (root->addr == BPFS_BLOCKNO_INVALID)
+		return 0;
+
+#if !COW_OPT
+	new_blockno = cow_block_entire(*blockno);
+	if (new_blockno == BPFS_BLOCKNO_INVALID)
+		return -ENOSPC;
+	root = (struct bpfs_tree_root*) (get_block(new_blockno) + root_off);
+#endif
+
+	if (!root->nbytes)
+		child_blockno = BPFS_BLOCKNO_INVALID;
+	else
+	{
+		int r;
+		if (!root->height)
+			r = truncate_block_zero_leaf(child_blockno, root->nbytes,
+			                             new_size, &child_blockno);
+		else
+			r = truncate_block_zero_indir(child_blockno, root->nbytes,
+			                              new_size, root->height, max_nblocks,
+			                              &child_blockno);
+		if (r < 0)
+			return r;
+	}
+	if (root->addr != child_blockno)
+		root->addr = child_blockno;
+
+	*blockno = new_blockno;
+	return 0;
+}
+
 struct callback_setattr_data {
 	struct stat *attr;
 	int to_set;
@@ -2166,24 +2286,34 @@ static int callback_setattr(char *block, unsigned off,
 		inode->uid = attr->st_uid;
 	if (to_set & FUSE_SET_ATTR_GID)
 		inode->gid = attr->st_gid;
-	if (to_set & FUSE_SET_ATTR_SIZE)
+	if (to_set & FUSE_SET_ATTR_SIZE && attr->st_size != inode->root.nbytes)
 	{
 		uint64_t new_blockno2 = new_blockno;
 		int r;
 
 		if (attr->st_size < inode->root.nbytes)
-			truncate_block_free(&inode->root, attr->st_size);
-		// TODO: expand file if attr->st_size > inode->root.nbytes
-		// probably do this on the read side (detect empty blocks)
+		{
+			if (NBLOCKS_FOR_NBYTES(attr->st_size) < NBLOCKS_FOR_NBYTES(inode->root.nbytes))
+			{
+				truncate_block_free(&inode->root, attr->st_size);
 
-		// TODO: change FREE to ATOMIC as part of optimizing to COW
-		// TODO: free blocks not along the trunk (or already happening?)
-		r = tree_change_height(&inode->root,
-		                       tree_height(NBLOCKS_FOR_NBYTES(attr->st_size)),
-		                       COMMIT_FREE, &new_blockno2);
-		if (r < 0)
-			return r;
-		assert(new_blockno == new_blockno2);
+				// TODO: change FREE to ATOMIC as part of optimizing to COW
+				// TODO: free blocks not along the trunk (or already happening?)
+				r = tree_change_height(&inode->root,
+				                       tree_height(NBLOCKS_FOR_NBYTES(attr->st_size)),
+				                       COMMIT_FREE, &new_blockno2);
+				if (r < 0)
+					return r;
+				assert(new_blockno == new_blockno2);
+			}
+		}
+		else
+		{
+			r = truncate_block_zero(&inode->root, attr->st_size, &new_blockno2);
+			if (r < 0)
+				return r;
+			assert(new_blockno == new_blockno2);
+		}
 
 		inode->root.nbytes = attr->st_size;
 	}
