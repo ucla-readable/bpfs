@@ -1334,17 +1334,20 @@ static void discover_indir_allocations(struct bpfs_indir_block *indir,
 	unsigned no;
 	for (no = 0; no <= lastno; no++)
 	{
-		set_block(indir->addr[no]);
-		if (height > 1)
+		if (indir->addr[no] != BPFS_BLOCKNO_INVALID)
 		{
-			struct bpfs_indir_block *child_indir = (struct bpfs_indir_block*) get_block(indir->addr[no]);
-			uint64_t child_valid;
-			if (no < lastno)
-				child_valid = child_max_nbytes;
-			else
-				child_valid = valid - no * child_max_nbytes;
-			discover_indir_allocations(child_indir, height - 1,
-			                           child_max_nblocks, child_valid);
+			set_block(indir->addr[no]);
+			if (height > 1)
+			{
+				struct bpfs_indir_block *child_indir = (struct bpfs_indir_block*) get_block(indir->addr[no]);
+				uint64_t child_valid;
+				if (no < lastno)
+					child_valid = child_max_nbytes;
+				else
+					child_valid = valid - no * child_max_nbytes;
+				discover_indir_allocations(child_indir, height - 1,
+				                           child_max_nblocks, child_valid);
+			}
 		}
 	}
 }
@@ -1355,7 +1358,7 @@ static void discover_tree_allocations(struct bpfs_tree_root *root)
 	if (root->nbytes)
 	{
 		set_block(root->addr);
-		if (root->height)
+		if (root->height && root->addr != BPFS_BLOCKNO_INVALID)
 		{
 			struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root->addr);
 			uint64_t max_nblocks = tree_max_nblocks(root->height);
