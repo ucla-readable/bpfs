@@ -528,7 +528,28 @@ static void free_block(uint64_t blockno)
 #endif
 }
 
-static void protect_bpram(void)
+static void protect_bpram_abort(void)
+{
+#if DETECT_STRAY_ACCESSES
+	struct staged_entry *cur;
+	for (cur = block_bitmap.frees; cur; cur = cur->next)
+		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
+		                  BPFS_BLOCK_SIZE,
+# if DETECT_NONCOW_WRITES
+		                  PROT_READ));
+# else
+		                  PROT_READ | PROT_WRITE));
+# endif
+
+	for (cur = block_bitmap.allocs; cur; cur = cur->next)
+		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
+		                  BPFS_BLOCK_SIZE, PROT_NONE));
+#elif DETECT_NONCOW_WRITES
+	xsyscall(mprotect(bpram, bpram_size, PROT_READ));
+#endif
+}
+
+static void protect_bpram_commit(void)
 {
 #if DETECT_NONCOW_WRITES
 # if DETECT_STRAY_ACCESSES
@@ -544,13 +565,13 @@ static void protect_bpram(void)
 
 static void abort_blocks(void)
 {
-	protect_bpram();
+	protect_bpram_abort();
 	bitmap_abort(&block_bitmap);
 }
 
 static void commit_blocks(void)
 {
-	protect_bpram();
+	protect_bpram_commit();
 	bitmap_commit(&block_bitmap);
 }
 
