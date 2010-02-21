@@ -44,6 +44,9 @@
 
 #define DETECT_NONCOW_WRITES (!SCSP_ENABLED && !defined(NDEBUG))
 #define DETECT_ALLOCATION_DIFFS (!defined(NDEBUG))
+// Alternatives to valgrind until it knows about our block alloc functions:
+#define DETECT_STRAY_ACCESSES (!defined(NDEBUG))
+#define BLOCK_POISON (!defined(NDEBUG))
 
 // Set to 1 to optimize away some COWs
 #define COW_OPT 0
@@ -468,14 +471,27 @@ static void destroy_block_allocations(void)
 	bitmap_destroy(&block_bitmap);
 }
 
+#if BLOCK_POISON
+static void poison_block(uint64_t blockno)
+{
+	uint32_t *block = (uint32_t*) get_block(blockno);
+	unsigned i;
+	for (i = 0; i < BPFS_BLOCK_SIZE / sizeof(*block); i++)
+		block[i] = 0xdeadbeef;
+}
+#endif
+
 static uint64_t alloc_block(void)
 {
 	uint64_t no = bitmap_alloc(&block_bitmap);
 	if (no == block_bitmap.ntotal)
 		return BPFS_BLOCKNO_INVALID;
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
-#if DETECT_NONCOW_WRITES
+#if (DETECT_STRAY_ACCESSES || DETECT_NONCOW_WRITES)
 	xsyscall(mprotect(get_block(no + 1), BPFS_BLOCK_SIZE, PROT_READ | PROT_WRITE));
+#endif
+#if BLOCK_POISON
+	poison_block(no + 1);
 #endif
 	return no + 1;
 }
@@ -500,31 +516,41 @@ static void free_block(uint64_t blockno)
 	assert(blockno != BPFS_BLOCKNO_INVALID);
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	bitmap_free(&block_bitmap, blockno - 1);
-#if DETECT_NONCOW_WRITES
+#if DETECT_STRAY_ACCESSES
+	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_NONE));
+#else
+# if BLOCK_POISON
+	poison_block(blockno);
+# endif
+# if DETECT_NONCOW_WRITES
 	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_READ));
+# endif
 #endif
 }
 
-#if DETECT_NONCOW_WRITES
 static void protect_bpram(void)
 {
+#if DETECT_NONCOW_WRITES
+# if DETECT_STRAY_ACCESSES
+	struct staged_entry *cur;
+	for (cur = block_bitmap.allocs; cur; cur = cur->next)
+		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
+		                  BPFS_BLOCK_SIZE, PROT_READ));
+# else
 	xsyscall(mprotect(bpram, bpram_size, PROT_READ));
-}
+# endif
 #endif
+}
 
 static void abort_blocks(void)
 {
-#if DETECT_NONCOW_WRITES
 	protect_bpram();
-#endif
 	bitmap_abort(&block_bitmap);
 }
 
 static void commit_blocks(void)
 {
-#if DETECT_NONCOW_WRITES
 	protect_bpram();
-#endif
 	bitmap_commit(&block_bitmap);
 }
 
@@ -1016,13 +1042,6 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 	}
 	indir = (struct bpfs_indir_block*) get_block(blockno);
 
-	if (bcallback && !off)
-	{
-		assert(commit == COMMIT_NONE);
-		assert(prev_blockno == blockno);
-		bcallback(blockno);
-	}
-
 	for (no = firstno; no <= lastno; no++)
 	{
 		uint64_t child_off, child_size, child_valid;
@@ -1099,6 +1118,13 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 			ret = 1;
 			break;
 		}
+	}
+
+	if (bcallback && !off)
+	{
+		assert(commit == COMMIT_NONE);
+		assert(prev_blockno == blockno);
+		bcallback(blockno);
 	}
 
 	if (prev_blockno != blockno)
@@ -3569,6 +3595,20 @@ int main(int argc, char **argv)
 	inform_pin_of_bpram(bpram, bpram_size);
 
 	xcall(init_allocations());
+
+#if DETECT_STRAY_ACCESSES
+	xsyscall(mprotect(bpram, bpram_size, PROT_NONE));
+	{
+		uint64_t off;
+		for (off = 0; off < bpram_size; off += BPFS_BLOCK_SIZE)
+			xsyscall(mprotect(bpram + off, BPFS_BLOCK_SIZE,
+# if DETECT_NONCOW_WRITES
+			                  PROT_READ));
+# else
+			                  PROT_READ | PROT_WRITE));
+# endif
+	}
+#endif
 
 	memmove(argv + 1, argv + 3, (argc - 2) * sizeof(*argv));
 	argc -= 2;
