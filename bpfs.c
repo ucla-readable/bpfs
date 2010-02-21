@@ -834,19 +834,23 @@ static int tree_change_height(struct bpfs_tree_root *root,
 	if (height_new > root->height)
 	{
 		unsigned height_delta = height_new - root->height;
-		uint64_t child_blockno = root->addr;
-		while (height_delta--)
+		if (root->nbytes && root->addr != BPFS_BLOCKNO_INVALID)
 		{
-			uint64_t new_blockno;
-			struct bpfs_indir_block *new_indir;
+			root_addr_new = root->addr;
+			while (height_delta--)
+			{
+				uint64_t new_blockno;
+				struct bpfs_indir_block *new_indir;
 
-			if ((new_blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
-				return -ENOSPC;
-			new_indir = (struct bpfs_indir_block*) get_block(new_blockno);
-			new_indir->addr[0] = child_blockno;
-			child_blockno = new_blockno;
+				if ((new_blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
+					return -ENOSPC;
+				new_indir = (struct bpfs_indir_block*) get_block(new_blockno);
+				new_indir->addr[0] = root_addr_new;
+				root_addr_new = new_blockno;
+			}
 		}
-		root_addr_new = child_blockno;
+		else
+			root_addr_new = BPFS_BLOCKNO_INVALID;
 	}
 	else
 	{
@@ -981,6 +985,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 	uint64_t child_max_nbytes = child_max_nblocks * BPFS_BLOCK_SIZE;
 	uint64_t firstno = off / (BPFS_BLOCK_SIZE * child_max_nblocks);
 	uint64_t lastno = (off + size - 1) / (BPFS_BLOCK_SIZE * child_max_nblocks);
+	uint64_t in_hole = false;
 	enum commit child_commit;
 	uint64_t no;
 	int ret = 0;
@@ -994,15 +999,20 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 
 	if (blockno == BPFS_BLOCKNO_INVALID)
 	{
+		uint64_t validno = (valid + BPFS_BLOCK_SIZE * child_max_nblocks - 1)
+		                   / (BPFS_BLOCK_SIZE * child_max_nblocks);
+
 		if (commit == COMMIT_NONE)
 			return crawl_hole(blockoff, off, size, valid, crawl_start,
 			                  callback, user);
 
+		static_assert(!BPFS_BLOCKNO_INVALID);
 		blockno = cow_block_hole(firstno * sizeof(indir->addr[0]),
 		                         (lastno + 1 - firstno) * sizeof(indir->addr[0]),
-		                         valid / (BPFS_BLOCK_SIZE * child_max_nblocks));
+		                         validno * sizeof(indir->addr[0]));
 		if (blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		in_hole = true;
 	}
 	indir = (struct bpfs_indir_block*) get_block(blockno);
 
@@ -1051,7 +1061,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 			child_valid = 0;
 		}
 
-		if (!child_valid)
+		if (!child_valid || in_hole)
 			child_blockno = child_new_blockno = BPFS_BLOCKNO_INVALID;
 		else
 			child_blockno = child_new_blockno = indir->addr[no];
@@ -1070,7 +1080,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 			                &child_new_blockno);
 		if (r < 0)
 			return r;
-		if (child_blockno != child_new_blockno)
+		if (child_blockno != child_new_blockno || in_hole)
 		{
 			assert(commit != COMMIT_NONE);
 			// TODO: opt: no need to copy if writing to invalid entries
@@ -1085,6 +1095,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		}
 		if (r == 1)
 		{
+			assert(!in_hole); // TODO: set the remaining entries to invalid
 			ret = 1;
 			break;
 		}
