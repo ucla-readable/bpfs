@@ -3631,6 +3631,10 @@ int main(int argc, char **argv)
 	}
 #endif
 
+#if BLOCK_POISON
+	printf("Block poisoning enabled. Write counting will be incorrect.\n");
+#endif
+
 	memmove(argv + 1, argv + 3, (argc - 2) * sizeof(*argv));
 	argc -= 2;
 
