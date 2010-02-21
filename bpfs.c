@@ -37,7 +37,6 @@
 // - can compiler reorder memory writes? watch out for SP and SCSP.
 // - how much simpler would it be to always have a correct height tree?
 // - passing size=1 to crawl(!COMMIT_NONE) forces extra writes
-// - report #blocks used, if not already, per file
 
 // Set to 0 to use shadow paging, 1 to use short-circuit shadow paging
 #define SCSP_ENABLED 0
@@ -129,7 +128,7 @@ typedef int (*crawl_callback_inode)(char *block, unsigned off,
                                     enum commit commit, void *user,
                                     uint64_t *blockno);
 
-typedef void (*crawl_blockno_callback)(uint64_t blockno);
+typedef void (*crawl_blockno_callback)(uint64_t blockno, bool leaf);
 
 static int crawl_inode(uint64_t ino, enum commit commit,
                        crawl_callback_inode callback, void *user);
@@ -137,7 +136,7 @@ static int crawl_inode(uint64_t ino, enum commit commit,
 static int crawl_inodes(uint64_t off, uint64_t size, enum commit commit,
                         crawl_callback callback, void *user);
 
-static void crawl_blocknos(struct bpfs_tree_root *root,
+static void crawl_blocknos(const struct bpfs_tree_root *root,
                            uint64_t off, uint64_t size,
                            crawl_blockno_callback callback);
 
@@ -666,11 +665,16 @@ static uint64_t cow_block_entire(uint64_t old_blockno)
 	return new_blockno;
 }
 
+static void callback_truncate_block_free(uint64_t blockno, bool leaf)
+{
+	free_block(blockno);
+}
+
 static void truncate_block_free(struct bpfs_tree_root *root, uint64_t new_size)
 {
 	uint64_t off = ROUNDUP64(new_size, BPFS_BLOCK_SIZE);
 	if (off < root->nbytes)
-		crawl_blocknos(root, off, BPFS_EOF, free_block);
+		crawl_blocknos(root, off, BPFS_EOF, callback_truncate_block_free);
 }
 
 
@@ -810,6 +814,28 @@ static struct bpfs_inode* get_inode(uint64_t ino)
 //
 // misc internal functions
 
+static uint64_t tree_nblocks_nblocks;
+
+static void callback_tree_nblocks(uint64_t blockno, bool leaf)
+{
+	assert(blockno != BPFS_BLOCKNO_INVALID);
+	if (leaf)
+		tree_nblocks_nblocks++;
+}
+
+static uint64_t tree_nblocks(const struct bpfs_tree_root *root)
+{
+	uint64_t nblocks;
+
+	assert(!tree_nblocks_nblocks);
+
+	crawl_blocknos(root, 0, BPFS_EOF, callback_tree_nblocks);
+
+	nblocks = tree_nblocks_nblocks;
+	tree_nblocks_nblocks = 0;
+	return nblocks;
+}
+
 static uint64_t bpram_blockno(const void *x)
 {
 	const char *c = (const char*) x;
@@ -832,8 +858,7 @@ static int bpfs_stat(fuse_ino_t ino, struct stat *stbuf)
 	stbuf->st_uid = inode->uid;
 	stbuf->st_gid = inode->gid;
 	stbuf->st_size = inode->root.nbytes;
-	stbuf->st_blocks = NBLOCKS_FOR_NBYTES(inode->root.nbytes)
-	                   * BPFS_BLOCK_SIZE / 512;
+	stbuf->st_blocks = tree_nblocks(&inode->root) * BPFS_BLOCK_SIZE / 512;
 	stbuf->st_atime = inode->atime.sec;
 	stbuf->st_mtime = inode->mtime.sec;
 	stbuf->st_ctime = inode->ctime.sec;
@@ -978,7 +1003,7 @@ static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
 		{
 			assert(blockno == prev_blockno);
 			assert(bcallback);
-			bcallback(child_blockno);
+			bcallback(child_blockno, true);
 		}
 		r = 0;
 	}
@@ -1145,7 +1170,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 	{
 		assert(commit == COMMIT_NONE);
 		assert(prev_blockno == blockno);
-		bcallback(blockno);
+		bcallback(blockno, false);
 	}
 
 	if (prev_blockno != blockno)
@@ -1154,7 +1179,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 }
 
 // Read-only crawl over the indirect and data blocks in root
-static void crawl_blocknos(struct bpfs_tree_root *root,
+static void crawl_blocknos(const struct bpfs_tree_root *root,
                            uint64_t off, uint64_t size,
                            crawl_blockno_callback callback)
 {
@@ -1164,16 +1189,18 @@ static void crawl_blocknos(struct bpfs_tree_root *root,
 	/* convenience */
 	if (off == BPFS_EOF)
 		off = root->nbytes;
-	assert(off < root->nbytes);
+	assert(!off || off < root->nbytes);
 	if (size == BPFS_EOF)
 		size = root->nbytes - off;
+	assert(size <= root->nbytes);
 	assert(off + size <= root->nbytes);
+
+	if (!(off + size))
+		return;
 
 	size = MIN(size, max_nblocks * BPFS_BLOCK_SIZE - off);
 	valid = MIN(root->nbytes, max_nblocks * BPFS_BLOCK_SIZE);
 
-	if (!(off + size))
-		return;
 
 	if (!root->height)
 	{
