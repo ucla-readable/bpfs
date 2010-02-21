@@ -744,6 +744,7 @@ static struct bpfs_inode* get_inode(uint64_t ino)
 static uint64_t bpram_blockno(const void *x)
 {
 	const char *c = (const char*) x;
+	assert(bpram <= c && c < bpram + bpram_size);
 	if (c < bpram || bpram + bpram_size <= c)
 		return BPFS_BLOCKNO_INVALID;
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
@@ -829,7 +830,7 @@ static int tree_change_height(struct bpfs_tree_root *root,
 	{
 		unsigned height_delta = root->height - height_new;
 		root_addr_new = root->addr;
-		while (height_delta--)
+		while (height_delta-- && root_addr_new != BPFS_BLOCKNO_INVALID)
 		{
 			struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root_addr_new);
 			// truncate_block_free() has already freed the block
@@ -855,6 +856,9 @@ static int tree_change_height(struct bpfs_tree_root *root,
 }
 
 
+static char zero_block[BPFS_BLOCK_SIZE]
+	__attribute__((aligned(BPFS_BLOCK_SIZE)));
+
 static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
                       unsigned off, unsigned size, unsigned valid,
                       uint64_t crawl_start, enum commit commit,
@@ -863,6 +867,7 @@ static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
 					  uint64_t *new_blockno)
 {
 	uint64_t blockno = prev_blockno;
+	bool is_hole = blockno == BPFS_BLOCKNO_INVALID && commit == COMMIT_NONE;
 	uint64_t child_blockno;
 	int r;
 
@@ -871,32 +876,74 @@ static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
 	assert(off + size <= BPFS_BLOCK_SIZE);
 	assert(valid <= BPFS_BLOCK_SIZE);
 
-	assert(!valid == (blockno == BPFS_BLOCKNO_INVALID));
-	if (blockno == BPFS_BLOCKNO_INVALID)
+	if (commit != COMMIT_NONE)
 	{
-		assert(commit != COMMIT_NONE);
-		if ((blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
-			return -ENOSPC;
+		assert(!valid == (blockno == BPFS_BLOCKNO_INVALID));
+		if (blockno == BPFS_BLOCKNO_INVALID)
+			if ((blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
+				return -ENOSPC;
 	}
 	child_blockno = blockno;
 
 	if (callback)
 	{
-		enum commit child_commit = (blockno == prev_blockno)
+		enum commit child_commit = (child_blockno == prev_blockno)
 		                           ? commit : COMMIT_FREE;
-		r = callback(blockoff, get_block(blockno), off, size, valid,
+		char *child_block;
+		if (is_hole)
+			child_block = zero_block;
+		else
+			child_block = get_block(child_blockno);
+
+		r = callback(blockoff, child_block, off, size, valid,
 		             crawl_start, child_commit, user, &child_blockno);
 		if (r >= 0 && prev_blockno != child_blockno)
 			*new_blockno = child_blockno;
 	}
 	else
 	{
-		assert(blockno == prev_blockno);
-		assert(bcallback);
-		bcallback(child_blockno);
+		if (!is_hole)
+		{
+			assert(blockno == prev_blockno);
+			assert(bcallback);
+			bcallback(child_blockno);
+		}
 		r = 0;
 	}
 	return r;
+}
+
+static int crawl_hole(uint64_t blockoff,
+                      uint64_t off, uint64_t size, uint64_t valid,
+                      uint64_t crawl_start,
+                      crawl_callback callback, void *user)
+{
+	uint64_t off_block = ROUNDDOWN64(off, BPFS_BLOCK_SIZE);
+	uint64_t end = off + size;
+
+	assert(crawl_start / BPFS_BLOCK_SIZE <= blockoff);
+	assert(off + size <= valid);
+
+	while (off < end)
+	{
+		unsigned child_off = off % BPFS_BLOCK_SIZE;
+		unsigned child_size = MIN(end - off, BPFS_BLOCK_SIZE);
+		unsigned child_valid = MIN(valid - off_block, BPFS_BLOCK_SIZE);
+		uint64_t child_blockno = BPFS_BLOCKNO_INVALID;
+		int r;
+
+		r = callback(blockoff, zero_block, child_off, child_size, child_valid,
+		             crawl_start, COMMIT_NONE, user, &child_blockno);
+		assert(child_blockno == BPFS_BLOCKNO_INVALID);
+		if (r != 0)
+			return r;
+
+		blockoff++;
+		off_block += BPFS_BLOCK_SIZE;
+		off = off_block;
+	}
+
+	return 0;
 }
 
 static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
@@ -926,7 +973,10 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 
 	if (blockno == BPFS_BLOCKNO_INVALID)
 	{
-		assert(commit != COMMIT_NONE);
+		if (commit == COMMIT_NONE)
+			return crawl_hole(blockoff, off, size, valid, crawl_start,
+			                  callback, user);
+
 		if ((blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 	}
@@ -1026,29 +1076,34 @@ static void crawl_blocknos(struct bpfs_tree_root *root,
                            uint64_t off, uint64_t size,
                            crawl_blockno_callback callback)
 {
-	assert(off + size <= root->nbytes);
+	uint64_t max_nblocks = tree_max_nblocks(root->height);
+	uint64_t valid;
 
 	/* convenience */
 	if (off == BPFS_EOF)
 		off = root->nbytes;
+	assert(off < root->nbytes);
 	if (size == BPFS_EOF)
 		size = root->nbytes - off;
+	assert(off + size <= root->nbytes);
+
+	size = MIN(size, max_nblocks * BPFS_BLOCK_SIZE - off);
+	valid = MIN(root->nbytes, max_nblocks * BPFS_BLOCK_SIZE);
 
 	if (!(off + size))
 		return;
 
 	if (!root->height)
 	{
-		assert(off + size <= BPFS_BLOCK_SIZE);
 		if (!off)
-			crawl_leaf(root->addr, 0, off, size, root->nbytes, off,
+			crawl_leaf(root->addr, 0, off, size, valid, off,
 			           COMMIT_NONE, NULL, NULL, callback, NULL);
 	}
 	else
 	{
 		crawl_indir(root->addr, off / BPFS_BLOCK_SIZE,
-		            off, size, root->nbytes, off, COMMIT_NONE,
-                    root->height, tree_max_nblocks(root->height),
+		            off, size, valid, off, COMMIT_NONE,
+                    root->height, max_nblocks,
 		            NULL, NULL, callback, NULL);
 	}
 }
@@ -1057,11 +1112,13 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
                       enum commit commit, crawl_callback callback, void *user,
                       uint64_t *prev_blockno)
 {
-	uint64_t height_required;
+	uint64_t requested_height;
 	uint64_t new_blockno = *prev_blockno;
 	unsigned root_off = block_offset(root);
 	uint64_t max_nblocks;
 	uint64_t child_new_blockno;
+	uint64_t child_size;
+	uint64_t child_valid;
 	enum commit child_commit;
 	int r;
 
@@ -1071,18 +1128,28 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	if (size == BPFS_EOF)
 		size = root->nbytes - off;
 
-	height_required = tree_height(NBLOCKS_FOR_NBYTES(off + size));
+	requested_height = tree_height(NBLOCKS_FOR_NBYTES(off + size));
 
-	if (root->height < height_required)
+	if (commit != COMMIT_NONE && root->height < requested_height)
 	{
-		assert(commit != COMMIT_NONE);
-		r = tree_change_height(root, height_required, COMMIT_ATOMIC, &new_blockno);
+		r = tree_change_height(root, requested_height, COMMIT_ATOMIC, &new_blockno);
 		if (r < 0)
 			return r;
 		root = (struct bpfs_tree_root*) (get_block(new_blockno) + root_off);
 	}
 	child_new_blockno = root->nbytes ? root->addr : BPFS_BLOCKNO_INVALID;
 	max_nblocks = tree_max_nblocks(root->height);
+	if (commit != COMMIT_NONE)
+	{
+		child_size = size;
+		child_valid = root->nbytes;
+	}
+	else
+	{
+		assert(off + size <= root->nbytes);
+		child_size = MIN(size, max_nblocks * BPFS_BLOCK_SIZE - off);
+		child_valid = MIN(root->nbytes, max_nblocks * BPFS_BLOCK_SIZE);
+	}
 
 	if (commit == COMMIT_NONE)
 		child_commit = COMMIT_NONE;
@@ -1098,9 +1165,9 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 
 	if (!root->height)
 	{
-		assert(off + size <= BPFS_BLOCK_SIZE);
-		if (size)
-			r = crawl_leaf(child_new_blockno, 0, off, size, root->nbytes, off,
+		if (child_size)
+			r = crawl_leaf(child_new_blockno, 0, off, child_size,
+			               child_valid, off,
 			               child_commit, callback, user, NULL,
 			               &child_new_blockno);
 		else
@@ -1109,7 +1176,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	else
 	{
 		r = crawl_indir(child_new_blockno, off / BPFS_BLOCK_SIZE,
-		                off, size, root->nbytes,
+		                off, child_size, child_valid,
                         off, child_commit, root->height, max_nblocks,
 		                callback, user, NULL, &child_new_blockno);
 	}
@@ -1118,10 +1185,19 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	{
 		bool change_addr = root->addr != child_new_blockno;
 		bool change_size = off + size > root->nbytes;
-		if (change_addr || change_size)
+
+		if (commit == COMMIT_NONE)
+		{
+			assert(!change_addr && !change_size);
+			assert(*prev_blockno == new_blockno);
+			if (r == 0)
+				r = crawl_hole((off + child_size) / BPFS_BLOCK_SIZE, child_size,
+				               size - child_size, root->nbytes, off,
+				               callback, user);
+		}
+		else if (change_addr || change_size)
 		{
 			bool inplace;
-			assert(commit != COMMIT_NONE);
 			if (*prev_blockno != new_blockno)
 				inplace = true;
 			else if (change_addr && change_size)
@@ -1145,10 +1221,15 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 				root->addr = child_new_blockno;
 			if (change_size)
 				root->nbytes = off + size;
+
+			*prev_blockno = new_blockno;
+		}
+		else
+		{
+			assert(*prev_blockno == new_blockno);
 		}
 	}
 
-	*prev_blockno = new_blockno;
 	return r;
 }
 
@@ -1355,16 +1436,16 @@ static void discover_indir_allocations(struct bpfs_indir_block *indir,
 static void discover_tree_allocations(struct bpfs_tree_root *root)
 {
 	// TODO: better to call crawl_tree()?
-	if (root->nbytes)
+	if (!root->nbytes || root->addr == BPFS_BLOCKNO_INVALID)
+		return;
+
+	set_block(root->addr);
+	if (root->height)
 	{
-		set_block(root->addr);
-		if (root->height && root->addr != BPFS_BLOCKNO_INVALID)
-		{
-			struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root->addr);
-			uint64_t max_nblocks = tree_max_nblocks(root->height);
-			discover_indir_allocations(indir, root->height, max_nblocks,
-			                           root->nbytes);
-		}
+		struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root->addr);
+		uint64_t max_nblocks = tree_max_nblocks(root->height);
+		discover_indir_allocations(indir, root->height, max_nblocks,
+		                           root->nbytes);
 	}
 }
 
@@ -3029,7 +3110,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 
 	size = MIN(size, inode->root.nbytes - off);
 	first_blockoff = off / BPFS_BLOCK_SIZE;
-	last_blockoff = (off + size - 1) / BPFS_BLOCK_SIZE;
+	last_blockoff = (off + size) ? (off + size - 1) / BPFS_BLOCK_SIZE : 0;
 	nblocks = last_blockoff - first_blockoff + 1;
 	iov = calloc(nblocks, sizeof(*iov));
 	if (!iov)
@@ -3356,6 +3437,13 @@ int main(int argc, char **argv)
 	staged_super = *bpfs_super;
 	bpfs_super = &staged_super;
 #endif
+
+	// linkers have maximum alignments:
+	assert(!(((uintptr_t) zero_block) % sysconf(_SC_PAGE_SIZE)));
+	// make sure mprotect() doesn't mark other data as read-only:
+	assert(!(BPFS_BLOCK_SIZE % sysconf(_SC_PAGE_SIZE)));
+	// make sure code does not write into the block of zeros:
+	xsyscall(mprotect(zero_block, BPFS_BLOCK_SIZE, PROT_READ));
 
 	inform_pin_of_bpram(bpram, bpram_size);
 
