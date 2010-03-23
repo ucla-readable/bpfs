@@ -7,7 +7,7 @@
 
 #define BPFS_FS_MAGIC 0xB9F5
 
-#define BPFS_STRUCT_VERSION 4
+#define BPFS_STRUCT_VERSION 5
 
 #define BPFS_BLOCK_SIZE 4096
 
@@ -62,14 +62,20 @@
 #define BPFS_TYPE_SOCK    6
 #define BPFS_TYPE_SYMLINK 7
 
+#define BPFS_TREE_LOG_MAX_HEIGHT 3
+#define BPFS_TREE_MAX_HEIGHT ((((uint64_t) 1) << BPFS_TREE_LOG_MAX_HEIGHT) - 1)
+#define BPFS_TREE_LOG_ROOT_MAX_ADDR (sizeof(uint64_t) * 8 - BPFS_TREE_LOG_MAX_HEIGHT)
+#define BPFS_TREE_ROOT_MAX_ADDR ((((uint64_t) 1) << BPFS_TREE_LOG_ROOT_MAX_ADDR) - 1)
 
-#define BPFS_TREE_MAX_HEIGHT 5
-#define BPFS_TREE_ROOT_MAX_ADDR (1 << (sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT))
+struct height_addr
+{
+	uint64_t height : BPFS_TREE_LOG_MAX_HEIGHT; // #levels of indir blocks
+	uint64_t addr   : BPFS_TREE_LOG_ROOT_MAX_ADDR;
+};
 
 struct bpfs_tree_root
 {
-	uint64_t height; // : BPFS_TREE_MAX_HEIGHT; // #levels of indir blocks
-	uint64_t addr; // : sizeof(uint64_t) * 8 - BPFS_TREE_MAX_HEIGHT;
+	struct height_addr ha;
 	uint64_t nbytes;
 };
 
@@ -116,7 +122,7 @@ struct bpfs_inode
 	struct bpfs_time atime;
 	struct bpfs_time ctime;
 	struct bpfs_time mtime;
-	uint8_t pad[60]; // pad to evenly fill a block
+	uint8_t pad[68]; // pad to evenly fill a block
 };
 
 #define BPFS_INODES_PER_BLOCK (BPFS_BLOCK_SIZE / sizeof(struct bpfs_inode))
@@ -142,6 +148,7 @@ struct bpfs_dirent
 // purpose. It returns its own address to avoid an unused function warning.
 static void* __bpfs_structs_static_asserts(void)
 {
+	static_assert(sizeof(struct height_addr) == 8); // need to set atomically
 	static_assert(!(sizeof(struct bpfs_tree_root) % 8));
 	static_assert(sizeof(struct bpfs_super) == BPFS_BLOCK_SIZE);
 	static_assert(sizeof(struct bpfs_indir_block) == BPFS_BLOCK_SIZE);

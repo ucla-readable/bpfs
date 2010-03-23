@@ -63,6 +63,12 @@
 		typeof(_b) __b = (_b);  \
 		__a >= __b ? __a : __b; \
 	})
+#define MAXU64(_a, _b) \
+	({ \
+		uint64_t __a = (_a);  \
+		uint64_t __b = (_b);  \
+		__a >= __b ? __a : __b; \
+	})
 
 // 64-bit integer rounding; only works for n = power of two
 // NOTE: ROUNDUP64() may eval n twice. This macro does not create a variable

@@ -30,7 +30,6 @@
 // - change memcpy() calls to only do atomic writes if size is aligned
 // - change read/crawl code to return zero block for unallocated blocks?
 //   (ie because of a tree height increase)
-// - merge tree height and root block address
 // - accounting for subdirs in dir nlinks causes CoW
 // - storing ".." in a directory causes CoW
 // - write fsck.bpfs?: check .., check nlinks, more?
@@ -872,6 +871,25 @@ static unsigned block_offset(const void *x)
 
 
 //
+// atomic setters for struct height_addr
+
+static void ha_set_addr(struct height_addr *pha, uint64_t addr)
+{
+	struct height_addr ha = { .height = pha->height, .addr = addr };
+	assert(addr <= BPFS_TREE_ROOT_MAX_ADDR);
+	*pha = ha;
+}
+
+static void ha_set(struct height_addr *pha, uint64_t height, uint64_t addr)
+{
+	struct height_addr ha = { .height = height, .addr = addr };
+	assert(height <= BPFS_TREE_MAX_HEIGHT);
+	assert(addr <= BPFS_TREE_ROOT_MAX_ADDR);
+	*pha = ha;
+}
+
+
+//
 // tree functions
 
 static uint64_t tree_max_nblocks(uint64_t height)
@@ -900,15 +918,15 @@ static int tree_change_height(struct bpfs_tree_root *root,
 {
 	uint64_t root_addr_new;
 
-	if (root->height == height_new)
+	if (root->ha.height == height_new)
 		return 0;
 
-	if (height_new > root->height)
+	if (height_new > root->ha.height)
 	{
-		unsigned height_delta = height_new - root->height;
-		if (root->nbytes && root->addr != BPFS_BLOCKNO_INVALID)
+		unsigned height_delta = height_new - root->ha.height;
+		if (root->nbytes && root->ha.addr != BPFS_BLOCKNO_INVALID)
 		{
-			root_addr_new = root->addr;
+			root_addr_new = root->ha.addr;
 			while (height_delta--)
 			{
 				uint64_t new_blockno;
@@ -926,8 +944,8 @@ static int tree_change_height(struct bpfs_tree_root *root,
 	}
 	else
 	{
-		unsigned height_delta = root->height - height_new;
-		root_addr_new = root->addr;
+		unsigned height_delta = root->ha.height - height_new;
+		root_addr_new = root->ha.addr;
 		while (height_delta-- && root_addr_new != BPFS_BLOCKNO_INVALID)
 		{
 			struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root_addr_new);
@@ -948,8 +966,7 @@ static int tree_change_height(struct bpfs_tree_root *root,
 		*blockno = new_blockno;
 	}
 
-	root->addr = root_addr_new;
-	root->height = height_new;
+	ha_set(&root->ha, root_addr_new, height_new);
 	return 0;
 }
 
@@ -1183,7 +1200,7 @@ static void crawl_blocknos(const struct bpfs_tree_root *root,
                            uint64_t off, uint64_t size,
                            crawl_blockno_callback callback)
 {
-	uint64_t max_nblocks = tree_max_nblocks(root->height);
+	uint64_t max_nblocks = tree_max_nblocks(root->ha.height);
 	uint64_t valid;
 
 	/* convenience */
@@ -1202,17 +1219,17 @@ static void crawl_blocknos(const struct bpfs_tree_root *root,
 	valid = MIN(root->nbytes, max_nblocks * BPFS_BLOCK_SIZE);
 
 
-	if (!root->height)
+	if (!root->ha.height)
 	{
 		if (!off)
-			crawl_leaf(root->addr, 0, off, size, valid, off,
+			crawl_leaf(root->ha.addr, 0, off, size, valid, off,
 			           COMMIT_NONE, NULL, NULL, callback, NULL);
 	}
 	else
 	{
-		crawl_indir(root->addr, off / BPFS_BLOCK_SIZE,
+		crawl_indir(root->ha.addr, off / BPFS_BLOCK_SIZE,
 		            off, size, valid, off, COMMIT_NONE,
-                    root->height, max_nblocks,
+		            root->ha.height, max_nblocks,
 		            NULL, NULL, callback, NULL);
 	}
 }
@@ -1248,12 +1265,12 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	if (commit != COMMIT_NONE)
 	{
 		uint64_t requested_height = tree_height(NBLOCKS_FOR_NBYTES(end));
-		uint64_t prev_height = root->height;
-		uint64_t new_height = MAX(root->height, requested_height);
+		uint64_t prev_height = root->ha.height;
+		uint64_t new_height = MAXU64(root->ha.height, requested_height);
 		uint64_t new_max_nblocks = tree_max_nblocks(new_height);
 		uint64_t prev_valid = MIN(root->nbytes,
 		                          BPFS_BLOCK_SIZE
-		                          * tree_max_nblocks(root->height));
+		                          * tree_max_nblocks(root->ha.height));
 		uint64_t new_valid = MIN(MAX(root->nbytes, end),
 		                         BPFS_BLOCK_SIZE
 		                         * tree_max_nblocks(new_height));
@@ -1265,7 +1282,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 		assert(root->nbytes != new_valid || root->nbytes >= end);
 		assert(new_valid <= BPFS_BLOCK_SIZE * new_max_nblocks);
 
-		if (root->height < requested_height)
+		if (root->ha.height < requested_height)
 		{
 			r = tree_change_height(root, requested_height, COMMIT_ATOMIC, &new_blockno);
 			if (r < 0)
@@ -1295,8 +1312,8 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 		}
 	}
 
-	child_new_blockno = root->nbytes ? root->addr : BPFS_BLOCKNO_INVALID;
-	max_nblocks = tree_max_nblocks(root->height);
+	child_new_blockno = root->nbytes ? root->ha.addr : BPFS_BLOCKNO_INVALID;
+	max_nblocks = tree_max_nblocks(root->ha.height);
 	if (commit != COMMIT_NONE)
 	{
 		child_size = size;
@@ -1320,7 +1337,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 			child_commit = commit;
 	}
 
-	if (!root->height)
+	if (!root->ha.height)
 	{
 		if (child_size)
 			r = crawl_leaf(child_new_blockno, 0, off, child_size,
@@ -1334,13 +1351,13 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	{
 		r = crawl_indir(child_new_blockno, off / BPFS_BLOCK_SIZE,
 		                off, child_size, child_valid,
-                        off, child_commit, root->height, max_nblocks,
+                        off, child_commit, root->ha.height, max_nblocks,
 		                callback, user, NULL, &child_new_blockno);
 	}
 
 	if (r >= 0)
 	{
-		bool change_addr = root->addr != child_new_blockno;
+		bool change_addr = root->ha.addr != child_new_blockno;
 		bool change_size = end > root->nbytes;
 
 		if (commit == COMMIT_NONE)
@@ -1379,7 +1396,7 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 				root = (struct bpfs_tree_root*) (get_block(new_blockno) + root_off);
 			}
 			if (change_addr)
-				root->addr = child_new_blockno;
+				ha_set_addr(&root->ha, child_new_blockno);
 			if (change_size)
 				root->nbytes = end;
 
@@ -1597,15 +1614,15 @@ static void discover_indir_allocations(struct bpfs_indir_block *indir,
 static void discover_tree_allocations(struct bpfs_tree_root *root)
 {
 	// TODO: better to call crawl_tree()?
-	if (!root->nbytes || root->addr == BPFS_BLOCKNO_INVALID)
+	if (!root->nbytes || root->ha.addr == BPFS_BLOCKNO_INVALID)
 		return;
 
-	set_block(root->addr);
-	if (root->height)
+	set_block(root->ha.addr);
+	if (root->ha.height)
 	{
-		struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root->addr);
-		uint64_t max_nblocks = tree_max_nblocks(root->height);
-		discover_indir_allocations(indir, root->height, max_nblocks,
+		struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(root->ha.addr);
+		uint64_t max_nblocks = tree_max_nblocks(root->ha.height);
+		discover_indir_allocations(indir, root->ha.height, max_nblocks,
 		                           root->nbytes);
 	}
 }
@@ -1685,6 +1702,12 @@ static int recover_superblock(void)
 	if (bpfs_super->commit_mode != BPFS_COMMIT_SP)
 		return -1;
 
+	if (super_2->magic != BPFS_FS_MAGIC)
+	{
+		fprintf(stderr, "Not a BPFS file system in SP mode (incorrect magic)\n");
+		return -1;
+	}
+
 	if (bpfs_super->inode_root_addr == bpfs_super->inode_root_addr_2)
 	{
 		if (super_2->inode_root_addr != super_2->inode_root_addr_2)
@@ -1711,6 +1734,9 @@ static void revert_superblock(void)
 
 static void persist_superblock(void)
 {
+#if !SCSP_ENABLED && !defined(NDEBUG)
+	static bool first_run = 1;
+#endif
 	struct bpfs_super *persistent_super_2 = persistent_super + 1;
 
 	assert(bpfs_super == &staged_super);
@@ -1722,6 +1748,15 @@ static void persist_superblock(void)
 	}
 # endif
 
+#if !SCSP_ENABLED && !defined(NDEBUG)
+	// Only compare supers after super2 has been created
+	if (first_run)
+		first_run = 0;
+	else
+		assert(!memcmp(persistent_super, persistent_super_2,
+		       sizeof(staged_super)));
+#endif
+
 	staged_super.inode_root_addr_2        = staged_super.inode_root_addr;
 	persistent_super->inode_root_addr     = staged_super.inode_root_addr;
 	persistent_super->inode_root_addr_2   = staged_super.inode_root_addr;
@@ -1729,7 +1764,7 @@ static void persist_superblock(void)
 	persistent_super_2->inode_root_addr   = staged_super.inode_root_addr;
 	persistent_super_2->inode_root_addr_2 = staged_super.inode_root_addr;
 
-	assert(!memcmp(persistent_super, &staged_super, sizeof(staged_super)));
+	assert(!memcmp(persistent_super,   &staged_super, sizeof(staged_super)));
 	assert(!memcmp(persistent_super_2, &staged_super, sizeof(staged_super)));
 
 # if DETECT_NONCOW_WRITES
@@ -2139,8 +2174,7 @@ static int callback_init_inode(char *block, unsigned off,
 	inode->gid = ciid->ctx->gid;
 	inode->nlinks = 1;
 	inode->flags = 0;
-	inode->root.addr = BPFS_BLOCKNO_INVALID;
-	inode->root.height = 0;
+	ha_set(&inode->root.ha, 0, BPFS_BLOCKNO_INVALID);
 	inode->root.nbytes = 0;
 	inode->mtime = inode->ctime = inode->atime = BPFS_TIME_NOW();
 	memset(inode->pad, 0, sizeof(inode->pad));
@@ -2218,8 +2252,8 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 		struct bpfs_inode *inode = get_inode(ino);
 		assert(inode);
 
-		inode->root.addr = alloc_block();
-		if (inode->root.addr == BPFS_BLOCKNO_INVALID)
+		ha_set_addr(&inode->root.ha, alloc_block());
+		if (inode->root.ha.addr == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 
 		if (S_ISDIR(mode))
@@ -2228,7 +2262,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 
 			inode->root.nbytes = BPFS_BLOCK_SIZE;
 
-			ndirent = (struct bpfs_dirent*) get_block(inode->root.addr);
+			ndirent = (struct bpfs_dirent*) get_block(inode->root.ha.addr);
 			assert(ndirent);
 
 			inode->nlinks++;
@@ -2245,7 +2279,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 		{
 			inode->root.nbytes = strlen(link) + 1;
 			assert(inode->root.nbytes <= BPFS_BLOCK_SIZE); // else use crawler
-			memcpy(get_block(inode->root.addr), link, inode->root.nbytes);
+			memcpy(get_block(inode->root.ha.addr), link, inode->root.nbytes);
 		}
 	}
 
@@ -2475,9 +2509,9 @@ static int truncate_block_zero(struct bpfs_tree_root *root,
 {
 	uint64_t new_blockno = *blockno;
 	unsigned root_off = block_offset(root);
-	uint64_t max_nblocks = tree_max_nblocks(root->height);
+	uint64_t max_nblocks = tree_max_nblocks(root->ha.height);
 	uint64_t max_nbytes = max_nblocks * BPFS_BLOCK_SIZE;
-	uint64_t child_blockno = root->addr;
+	uint64_t child_blockno = root->ha.addr;
 
 	/* convenience. NOTE: EOF is a quasi end of file here. */
 	if (max_nbytes <= root->nbytes)
@@ -2495,7 +2529,7 @@ static int truncate_block_zero(struct bpfs_tree_root *root,
 		return 0;
 
 
-	if (root->addr == BPFS_BLOCKNO_INVALID)
+	if (root->ha.addr == BPFS_BLOCKNO_INVALID)
 		return 0;
 
 #if !COW_OPT
@@ -2510,18 +2544,18 @@ static int truncate_block_zero(struct bpfs_tree_root *root,
 	else
 	{
 		int r;
-		if (!root->height)
+		if (!root->ha.height)
 			r = truncate_block_zero_leaf(child_blockno, begin, end, valid,
 			                             &child_blockno);
 		else
 			r = truncate_block_zero_indir(child_blockno, begin, end, valid,
-			                              root->height, max_nblocks,
+			                              root->ha.height, max_nblocks,
 			                              &child_blockno);
 		if (r < 0)
 			return r;
 	}
-	if (root->addr != child_blockno)
-		root->addr = child_blockno;
+	if (root->ha.addr != child_blockno)
+		ha_set_addr(&root->ha, child_blockno);
 
 	*blockno = new_blockno;
 	return 0;
@@ -2657,7 +2691,7 @@ static void fuse_readlink(fuse_req_t req, fuse_ino_t ino)
 	assert(inode->root.nbytes <= BPFS_BLOCK_SIZE);
 
 	bpfs_commit();
-	xcall(fuse_reply_readlink(req, get_block(inode->root.addr)));
+	xcall(fuse_reply_readlink(req, get_block(inode->root.ha.addr)));
 }
 
 static void fuse_mknod(fuse_req_t req, fuse_ino_t parent_ino, const char *name,
