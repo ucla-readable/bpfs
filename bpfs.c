@@ -72,6 +72,11 @@
 # define Dprintf(x...) do {} while(0)
 #endif
 
+#if DETECT_NONCOW_WRITES
+# define PROT_INUSE_OLD PROT_READ
+#else
+# define PROT_INUSE_OLD (PROT_READ | PROT_WRITE)
+#endif
 
 // TODO: repharse this as you-see-everything-p?
 // NOTE: this doesn't describe situations where the top block is already COWed
@@ -453,6 +458,18 @@ static void bitmap_commit(struct bitmap *bitmap)
 	bitmap->prev_ntotal = 0;
 }
 
+#if DETECT_STRAY_ACCESSES
+// Limit the define only because the function is otherwise not referenced
+static bool bitmap_is_alloced(const struct bitmap *bitmap, uint64_t no)
+{
+	assert(no < bitmap->ntotal);
+	// right now this function is only used with no outstanding allocs or frees
+	assert(!bitmap->allocs);
+	assert(!bitmap->frees);
+	return bitmap->bitmap[no / 8] & (1 << (no % 8));
+}
+#endif
+
 
 //
 // block allocation
@@ -532,13 +549,7 @@ static void protect_bpram_abort(void)
 	struct staged_entry *cur;
 	for (cur = block_bitmap.frees; cur; cur = cur->next)
 		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
-		                  BPFS_BLOCK_SIZE,
-# if DETECT_NONCOW_WRITES
-		                  PROT_READ));
-# else
-		                  PROT_READ | PROT_WRITE));
-# endif
-
+		                  BPFS_BLOCK_SIZE, PROT_INUSE_OLD));
 	for (cur = block_bitmap.allocs; cur; cur = cur->next)
 		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
 		                  BPFS_BLOCK_SIZE, PROT_NONE));
@@ -588,6 +599,16 @@ static char* get_block(uint64_t blockno)
 	}
 	return bpram + (blockno - 1) * BPFS_BLOCK_SIZE;
 }
+
+#if DETECT_STRAY_ACCESSES
+// Limit the define only because the function is otherwise not referenced
+static bool block_is_alloced(uint64_t blockno)
+{
+	xassert(blockno != BPFS_BLOCKNO_INVALID);
+	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	return bitmap_is_alloced(&block_bitmap, blockno - 1);
+}
+#endif
 
 
 //
@@ -3682,14 +3703,12 @@ int main(int argc, char **argv)
 #if DETECT_STRAY_ACCESSES
 	xsyscall(mprotect(bpram, bpram_size, PROT_NONE));
 	{
-		uint64_t off;
-		for (off = 0; off < bpram_size; off += BPFS_BLOCK_SIZE)
-			xsyscall(mprotect(bpram + off, BPFS_BLOCK_SIZE,
-# if DETECT_NONCOW_WRITES
-			                  PROT_READ));
-# else
-			                  PROT_READ | PROT_WRITE));
-# endif
+		uint64_t blockno;
+		static_assert(BPFS_BLOCKNO_INVALID == 0);
+		for (blockno = 1; blockno < bpfs_super->nblocks + 1; blockno++)
+			if (block_is_alloced(blockno))
+				xsyscall(mprotect(bpram + (blockno - 1) * BPFS_BLOCK_SIZE,
+				                  BPFS_BLOCK_SIZE, PROT_INUSE_OLD));
 	}
 #endif
 
