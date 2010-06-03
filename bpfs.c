@@ -2999,6 +2999,7 @@ static void fuse_rename(fuse_req_t req,
 	if (r < 0)
 		goto abort;
 
+	// FIXME: should we also update ctime for dst_ino and src_ino? ext4 does.
 	r = crawl_inode(dst_parent_ino, COMMIT_COPY, callback_set_cmtime, &time_now);
 	if (r < 0)
 		goto abort;
