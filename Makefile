@@ -18,9 +18,11 @@ clean:
 	rm -f $(BIN) $(OBJS) $(TAGS)
 
 tags: $(SRCS)
-	if ctags --version | grep -q Exuberant; then ctags $(SRCS); else touch $@; fi
+	@echo + ctags tags
+	@if ctags --version | grep -q Exuberant; then ctags $(SRCS); else touch $@; fi
 TAGS: $(SRCS)
-	if ctags --version | grep -q Exuberant; then ctags -e $(SRCS); else touch $@; fi
+	@echo + ctags TAGS
+	@if ctags --version | grep -q Exuberant; then ctags -e $(SRCS); else touch $@; fi
 
 bpfs.o: bpfs.c mkbpfs.h bpfs_structs.h util.h
 	$(CC) $(CFLAGS) `pkg-config --cflags fuse` -c -o $@ $<
