@@ -38,16 +38,19 @@
 // - passing size=1 to crawl(!COMMIT_NONE) forces extra writes
 
 // Set to 0 to use shadow paging, 1 to use short-circuit shadow paging
-#define SCSP_ENABLED 0
+#define SCSP_ENABLED 1
 
 #define DETECT_NONCOW_WRITES (!SCSP_ENABLED && !defined(NDEBUG))
 #define DETECT_ALLOCATION_DIFFS (!defined(NDEBUG))
 // Alternatives to valgrind until it knows about our block alloc functions:
-#define DETECT_STRAY_ACCESSES (!defined(NDEBUG))
+// FIXME: broken with SCSP at the moment
+#define DETECT_STRAY_ACCESSES (!SCSP_ENABLED && !defined(NDEBUG))
 #define BLOCK_POISON (!defined(NDEBUG))
 
 // Set to 1 to optimize away some COWs
 #define COW_OPT 0
+// Real COW enable. "COW_OPT" is just a placeholder.
+#define COW_OPT_R SCSP_ENABLED
 
 // STDTIMEOUT is not 0 because of a fuse kernel module bug.
 // Miklos's 2006/06/27 email, E1FvBX0-0006PB-00@dorka.pomaz.szeredi.hu, fixes.
@@ -88,6 +91,11 @@ enum commit {
 	COMMIT_ATOMIC, // write in-place if write is atomic; otherwise, copy
 #else
 	COMMIT_ATOMIC = COMMIT_COPY,
+#endif
+#if COW_OPT_R
+	COMMIT_ATOMIC_R,
+#else
+	COMMIT_ATOMIC_R = COMMIT_COPY,
 #endif
 	COMMIT_FREE,   // no restrictions on writes (e.g., region is not yet refed)
 };
@@ -834,6 +842,17 @@ static struct bpfs_inode* get_inode(uint64_t ino)
 //
 // misc internal functions
 
+/* Return whether a write can be made atomically.
+ * 'offset': byte offset into the block.
+ * 'size': number of bytes to write.
+ */
+static bool can_atomic_write(unsigned offset, unsigned size)
+{
+	unsigned last = offset + size - 1;
+	return last - offset < ATOMIC_SIZE
+	       && (offset % ATOMIC_SIZE) <= (last % ATOMIC_SIZE);
+}
+
 static uint64_t tree_nblocks_nblocks;
 
 static void callback_tree_nblocks(uint64_t blockno, bool leaf)
@@ -856,6 +875,8 @@ static uint64_t tree_nblocks(const struct bpfs_tree_root *root)
 	return nblocks;
 }
 
+#if !SCSP_ENABLED
+// Limit the define only because the function is otherwise not referenced
 static uint64_t bpram_blockno(const void *x)
 {
 	const char *c = (const char*) x;
@@ -865,6 +886,7 @@ static uint64_t bpram_blockno(const void *x)
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	return (((uintptr_t) (c - bpram)) / BPFS_BLOCK_SIZE) + 1;
 }
+#endif
 
 static int bpfs_stat(fuse_ino_t ino, struct stat *stbuf)
 {
@@ -1712,10 +1734,12 @@ static void destroy_allocations(void)
 //
 // commit, abort, and recover
 
-#if !SCSP_ENABLED
 static int recover_superblock(void)
 {
 	struct bpfs_super *super_2 = bpfs_super + 1;
+
+	if (bpfs_super->commit_mode != super_2->commit_mode)
+		return -1;
 
 	if (bpfs_super->commit_mode == BPFS_COMMIT_SCSP)
 		return 0;
@@ -1741,6 +1765,7 @@ static int recover_superblock(void)
 	return 0;
 }
 
+#if !SCSP_ENABLED
 static struct bpfs_super *persistent_super;
 static struct bpfs_super staged_super;
 
@@ -3000,7 +3025,12 @@ static void fuse_rename(fuse_req_t req,
 		src_sd.dirent = get_dirent(src_parent_ino, src_sd.dirent_off);
 		assert(src_sd.dirent);
 
+#if !SCSP_ENABLED
 		assert(block_freshly_alloced(bpram_blockno(dst_sd.dirent)));
+#else
+		// TODO: the assignment to dst_sd.dirent assumes that it is not
+		// yet referenced yet. Assert this (how?) or remove this assumption.
+#endif
 		dst_sd.dirent->file_type = src_sd.dirent->file_type;
 	}
 
@@ -3392,7 +3422,7 @@ static int callback_write(uint64_t blockoff, char *block,
 	uint64_t buf_offset = blockoff * BPFS_BLOCK_SIZE + off - crawl_start;
 
 	assert(commit != COMMIT_NONE);
-	if (commit == COMMIT_COPY || (commit == COMMIT_ATOMIC && size > ATOMIC_SIZE))
+	if (commit == COMMIT_COPY || (commit == COMMIT_ATOMIC_R && !can_atomic_write(off, size)))
 	{
 		uint64_t newno = cow_block(*new_blockno, off, size, valid);
 		if (newno == BPFS_BLOCKNO_INVALID)
@@ -3401,7 +3431,7 @@ static int callback_write(uint64_t blockoff, char *block,
 		block = get_block(newno);
 	}
 
-	// TODO: if size <= ATOMIC_SIZE, does memcpy() make exactly one write?
+	// TODO: if can_atomic_write(), will memcpy() make just one write?
 	memcpy(block + off, buf + buf_offset, size);
 	return 0;
 }
@@ -3416,7 +3446,7 @@ static int callback_set_mtime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit != COMMIT_FREE && (!COW_OPT_R || commit != COMMIT_ATOMIC_R))
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -3443,14 +3473,16 @@ static void fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 	Dprintf("%s(ino = %lu, off = %" PRId64 ", size = %zu)\n",
 	        __FUNCTION__, ino, off, size);
 
-	r = crawl_data(ino, off, size, COMMIT_ATOMIC,
+	r = crawl_data(ino, off, size, COMMIT_ATOMIC_R,
 	               callback_write, buf_unconst);
 
 	if (r >= 0)
 	{
 		struct bpfs_time time_now = BPFS_TIME_NOW();
-		// TODO: for SCSP: what to do if this fails?
-		r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_mtime, &time_now);
+		r = crawl_inode(ino, COMMIT_ATOMIC_R, callback_set_mtime, &time_now);
+#if SCSP_ENABLED
+		assert(r >= 0);
+#endif
 	}
 
 	if (r < 0)
