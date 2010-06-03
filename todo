@@ -1,0 +1,37 @@
+- add SCSP to BPFS
+- start writing benchmarks and measurement tools now to evaluate dev of SCSP?
+- could make truncate(expand) write fewer bytes by adding an inode field
+	'valid', where valid <= nbytes
+- introduce offset typedefs: blockno_t, pgno_t, byteno_t, nbytes_t, ?
+	typedef uint64_t blkno_t;  // BPRAM block number
+	typedef uint64_t blkidx_t; // block index into a file
+	typedef uint64_t byteno_t; // byte number
+- valgrind: http://valgrind.org/docs/manual/manual-core-adv.html
+
+* benchmarks
+- postmark
+- untar
+- rm
+- something involving rename
+- small, large appends, overwrites
+- create large file
+- well-respected benchmark
+
+* measurements
+- enable larger writes with (fuse 2.8 and -o big_writes) or -o direct_io?
+- compare SCSP to SP. and minmal? and ext2,ext3,ext4,btrfs?
+- bytes written
+  - measure actual writes
+    - what code contributes how much to this measurement?
+    - valgrind? instrument code? (macros around writes? decls?)
+	- must the controller write an entire cache line? if so, measure this?
+  - measure #bytes that change in file system image
+- number of epoch barriers?
+- correctness
+  - detect consistency
+  - detect syscall atomicity
+  - detect if file system does what it is supposed to (eg renames the file)
+
+* limits
+- SCSP write() can be atomic, but is it guaranteed? eg failed allocation part
+  way through a large write? in general, how does abort work?
