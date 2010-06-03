@@ -7,10 +7,10 @@ CFLAGS = -Wall -g
 
 .PHONY: all clean
 
-BIN = bpfs mkfs.bpfs
+BIN = bpfs mkfs.bpfs pwrite
 OBJS = bpfs.o mkfs.bpfs.o mkbpfs.o
 TAGS = tags TAGS
-SRCS = bpfs.c mkfs.bpfs.c mkbpfs.c mkbpfs.h bpfs_structs.h util.h
+SRCS = bpfs.c mkfs.bpfs.c mkbpfs.c mkbpfs.h bpfs_structs.h util.h pwrite.c
 
 all: $(BIN) $(TAGS)
 

@@ -1,5 +1,6 @@
 bpfs
 mkfs.bpfs
+pwrite
 *.o
 tags
 TAGS
