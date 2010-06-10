@@ -998,8 +998,9 @@ static int tree_change_height(struct bpfs_tree_root *root,
 	}
 
 	assert(commit != COMMIT_NONE);
-	// TODO: merge tree root height and addr fields to permit atomic change
-	if (commit == COMMIT_COPY || commit == COMMIT_ATOMIC)
+	// TODO: allow atomic update now that the tree root height and addr fields
+	//       are merged
+	if (commit != COMMIT_FREE)
 	{
 		unsigned root_off = block_offset(root);
 		uint64_t new_blockno = cow_block_entire(*blockno);
@@ -1122,12 +1123,23 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 	uint64_t no;
 	int ret = 0;
 
-	if (commit == COMMIT_FREE)
-		child_commit = COMMIT_FREE;
-	else if (commit == COMMIT_ATOMIC)
-		child_commit = (firstno == lastno) ? COMMIT_ATOMIC : COMMIT_COPY;
-	else
+	switch (commit) {
+#if COW_OPT
+	case COMMIT_ATOMIC:
+		child_commit = (firstno == lastno) ? commit : COMMIT_COPY;
+		break;
+#endif
+#if COW_OPT_R
+	case COMMIT_ATOMIC_R:
+		child_commit = (firstno == lastno) ? commit : COMMIT_COPY;
+		break;
+#endif
+	case COMMIT_FREE:
+	case COMMIT_COPY:
+	case COMMIT_NONE:
 		child_commit = commit;
+		break;
+	}
 
 	if (blockno == BPFS_BLOCKNO_INVALID)
 	{
@@ -1138,7 +1150,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 			return crawl_hole(blockoff, off, size, valid, crawl_start,
 			                  callback, user);
 
-		static_assert(!BPFS_BLOCKNO_INVALID);
+		static_assert(BPFS_BLOCKNO_INVALID == 0);
 		blockno = cow_block_hole(firstno * sizeof(indir->addr[0]),
 		                         (lastno + 1 - firstno) * sizeof(indir->addr[0]),
 		                         validno * sizeof(indir->addr[0]));
@@ -1209,7 +1221,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		{
 			assert(commit != COMMIT_NONE);
 			// TODO: opt: no need to copy if writing to invalid entries
-			if (prev_blockno == blockno && (commit == COMMIT_COPY || (commit == COMMIT_ATOMIC && firstno != lastno)))
+			if (!(prev_blockno != blockno || (COW_OPT && commit == COMMIT_ATOMIC && firstno == lastno)))
 			{
 				// TODO: avoid copying data that will be overwritten?
 				if ((blockno = cow_block_entire(blockno)) == BPFS_BLOCKNO_INVALID)
@@ -1307,13 +1319,13 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 
 	if (commit != COMMIT_NONE)
 	{
-		uint64_t requested_height = tree_height(NBLOCKS_FOR_NBYTES(end));
 		uint64_t prev_height = root->ha.height;
-		uint64_t new_height = MAXU64(root->ha.height, requested_height);
+		uint64_t requested_height = tree_height(NBLOCKS_FOR_NBYTES(end));
+		uint64_t new_height = MAXU64(prev_height, requested_height);
 		uint64_t new_max_nblocks = tree_max_nblocks(new_height);
 		uint64_t prev_valid = MIN(root->nbytes,
 		                          BPFS_BLOCK_SIZE
-		                          * tree_max_nblocks(root->ha.height));
+		                          * tree_max_nblocks(prev_height));
 		uint64_t new_valid = MIN(MAX(root->nbytes, end),
 		                         BPFS_BLOCK_SIZE
 		                         * tree_max_nblocks(new_height));
@@ -1368,17 +1380,12 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	}
 	child_valid = MIN(root->nbytes, max_nblocks * BPFS_BLOCK_SIZE);
 
-	if (commit == COMMIT_NONE)
-		child_commit = COMMIT_NONE;
-	else if (commit == COMMIT_FREE)
-		child_commit = COMMIT_FREE;
+	if (commit == COMMIT_NONE || commit == COMMIT_FREE)
+		child_commit = commit;
+	else if (off < root->nbytes && root->nbytes < end)
+		child_commit = COMMIT_COPY; // data needs atomic commit with nbytes
 	else
-	{
-		if (off < root->nbytes && root->nbytes < end)
-			child_commit = COMMIT_COPY; // data needs atomic commit with nbytes
-		else
-			child_commit = commit;
-	}
+		child_commit = commit;
 
 	if (!root->ha.height)
 	{
@@ -1466,7 +1473,9 @@ static int crawl_inodes(uint64_t off, uint64_t size, enum commit commit,
 
 	if (r >= 0 && child_blockno != bpfs_super->inode_root_addr)
 	{
-		assert(commit != COMMIT_NONE);
+		// FIXME: callers should not pass COMMIT_COPY.
+		// assert(commit == COMMIT_ATOMIC || commit == COMMIT_ATOMIC_R);
+		assert(commit == COMMIT_COPY || commit == COMMIT_ATOMIC || commit == COMMIT_ATOMIC_R);
 		bpfs_super->inode_root_addr = child_blockno;
 	}
 
@@ -1614,7 +1623,7 @@ static int crawl_inode_2(uint64_t ino_1, uint64_t off_1, uint64_t size_1,
 	               callback_crawl_inode, &cci2d, &new_blockno);
 	if (r >= 0 && bpfs_super->inode_root_addr != new_blockno)
 	{
-		xassert(commit != COMMIT_NONE);
+		assert(commit == COMMIT_ATOMIC || commit == COMMIT_ATOMIC_R);
 		bpfs_super->inode_root_addr = new_blockno;
 	}
 	return r;
@@ -1786,6 +1795,9 @@ static void persist_superblock(void)
 	struct bpfs_super *persistent_super_2 = persistent_super + 1;
 
 	assert(bpfs_super == &staged_super);
+
+	if (!memcmp(persistent_super, &staged_super, sizeof(staged_super)))
+		return; // update unnecessary
 
 # if DETECT_NONCOW_WRITES
 	{
@@ -3034,6 +3046,9 @@ static void fuse_rename(fuse_req_t req,
 		dst_sd.dirent->file_type = src_sd.dirent->file_type;
 	}
 
+	// TODO: change the below crawls from COMMIT_COPY to COMMIT_ATOMIC_R.
+	// Or, do they need to COW?
+
 #if 0
 	// TODO: combine alloc_dirent() into this crawl
 	crawl_inode_2(src_parent_ino, src_dirent_off, src_dirent->rec_len,
@@ -3252,7 +3267,7 @@ static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
 	if (r < 0)
 		goto abort;
 
-	r = crawl_inode(ino, COMMIT_COPY, callback_set_atime, &time_now);
+	r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_atime, &time_now);
 	if (r < 0)
 		goto abort;
 
@@ -3400,7 +3415,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 	r = crawl_data(ino, off, size, COMMIT_NONE, callback_read, iov);
 	assert(r >= 0);
 
-	r = crawl_inode(ino, COMMIT_COPY, callback_set_atime, &time_now);
+	r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_atime, &time_now);
 	if (r < 0)
 		goto abort;
 
@@ -3422,7 +3437,10 @@ static int callback_write(uint64_t blockoff, char *block,
 	uint64_t buf_offset = blockoff * BPFS_BLOCK_SIZE + off - crawl_start;
 
 	assert(commit != COMMIT_NONE);
-	if (commit == COMMIT_COPY || (commit == COMMIT_ATOMIC_R && !can_atomic_write(off, size)))
+	if (!(commit == COMMIT_FREE
+	      || (COW_OPT_R &&
+	          (commit == COMMIT_ATOMIC_R
+	           && (can_atomic_write(off, size) || off >= valid)))))
 	{
 		uint64_t newno = cow_block(*new_blockno, off, size, valid);
 		if (newno == BPFS_BLOCKNO_INVALID)
