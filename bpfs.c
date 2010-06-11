@@ -510,6 +510,7 @@ static uint64_t alloc_block(void)
 	if (no == block_bitmap.ntotal)
 		return BPFS_BLOCKNO_INVALID;
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	assert(no + 1 >= BPFS_BLOCKNO_FIRST_ALLOC);
 #if (DETECT_STRAY_ACCESSES || DETECT_NONCOW_WRITES)
 	xsyscall(mprotect(get_block(no + 1), BPFS_BLOCK_SIZE, PROT_READ | PROT_WRITE));
 #endif
@@ -537,6 +538,7 @@ static void set_block(uint64_t blockno)
 static void free_block(uint64_t blockno)
 {
 	assert(blockno != BPFS_BLOCKNO_INVALID);
+	assert(blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	bitmap_free(&block_bitmap, blockno - 1);
 #if DETECT_STRAY_ACCESSES
