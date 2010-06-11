@@ -1012,7 +1012,7 @@ static int tree_change_height(struct bpfs_tree_root *root,
 		*blockno = new_blockno;
 	}
 
-	ha_set(&root->ha, root_addr_new, height_new);
+	ha_set(&root->ha, height_new, root_addr_new);
 	return 0;
 }
 
