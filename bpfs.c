@@ -2697,7 +2697,8 @@ static int callback_setattr(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	// TODO: avoid COW when COMMIT_ATOMIC and can change atomically
+	// TODO: avoid COW when COMMIT_ATOMIC_R and can change atomically.
+	// what is the ovehead of not avoiding COWs?
 	if (commit != COMMIT_FREE)
 	{
 		new_blockno = cow_block_entire(*blockno);
@@ -2724,7 +2725,7 @@ static int callback_setattr(char *block, unsigned off,
 			{
 				truncate_block_free(&inode->root, attr->st_size);
 
-				// TODO: change FREE to ATOMIC as part of optimizing to COW
+				// TODO: change FREE to ATOMIC_R as part of optimizing to COW
 				// TODO: free blocks not along the trunk (or already happening?)
 				r = tree_change_height(&inode->root,
 				                       tree_height(NBLOCKS_FOR_NBYTES(attr->st_size)),
@@ -2785,7 +2786,7 @@ static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 	// in fuse 2.8.1, 7 is atime_now and 8 is mtime_now. 6 is skipped.
 	// assert(!(to_set & ~(FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID | FUSE_SET_ATTR_SIZE | FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME)));
 
-	r = crawl_inode(ino, COMMIT_ATOMIC, callback_setattr, &csd);
+	r = crawl_inode(ino, COMMIT_ATOMIC_R, callback_setattr, &csd);
 	if (r < 0)
 	{
 		bpfs_abort();
