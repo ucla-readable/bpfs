@@ -8,12 +8,14 @@
 #include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/vfs.h>
 #include <unistd.h>
@@ -45,7 +47,7 @@
 // Alternatives to valgrind until it knows about our block alloc functions:
 // FIXME: broken with SCSP at the moment
 #define DETECT_STRAY_ACCESSES (!SCSP_ENABLED && !defined(NDEBUG))
-#define BLOCK_POISON (!defined(NDEBUG))
+#define BLOCK_POISON (0 && !defined(NDEBUG))
 
 // Set to 1 to optimize away some COWs
 #define COW_OPT 0
@@ -55,6 +57,9 @@
 // STDTIMEOUT is not 0 because of a fuse kernel module bug.
 // Miklos's 2006/06/27 email, E1FvBX0-0006PB-00@dorka.pomaz.szeredi.hu, fixes.
 #define STDTIMEOUT 1.0
+
+// Maximum interval between two random fscks. Unit is microseconds.
+#define RFSCK_MAX_INTERVAL 100000
 
 #define FUSE_ERR_SUCCESS 0
 
@@ -317,6 +322,18 @@ static void bitmap_destroy(struct bitmap *bitmap)
 	staged_list_free(&bitmap->frees);
 }
 
+static void bitmap_move(struct bitmap *dst, struct bitmap *org)
+{
+	memcpy(dst, org, sizeof(*dst));
+
+	org->bitmap = NULL;
+	org->ntotal = 0;
+	org->nfree = 0;
+	org->allocs = NULL;
+	org->frees = NULL;
+	org->prev_ntotal = 0;
+}
+
 static int bitmap_resize(struct bitmap *bitmap, uint64_t ntotal)
 {
 	char *new_bitmap;
@@ -482,16 +499,25 @@ static bool bitmap_is_alloced(const struct bitmap *bitmap, uint64_t no)
 //
 // block allocation
 
-static struct bitmap block_bitmap;
+struct block_allocation {
+	struct bitmap bitmap;
+};
+
+static struct block_allocation block_alloc;
 
 static int init_block_allocations(void)
 {
-	return bitmap_init(&block_bitmap, bpfs_super->nblocks);
+	return bitmap_init(&block_alloc.bitmap, bpfs_super->nblocks);
 }
 
 static void destroy_block_allocations(void)
 {
-	bitmap_destroy(&block_bitmap);
+	bitmap_destroy(&block_alloc.bitmap);
+}
+
+static void move_block_allocations(struct block_allocation *dst, struct block_allocation *org)
+{
+	bitmap_move(&dst->bitmap, &org->bitmap);
 }
 
 #if BLOCK_POISON
@@ -506,8 +532,8 @@ static void poison_block(uint64_t blockno)
 
 static uint64_t alloc_block(void)
 {
-	uint64_t no = bitmap_alloc(&block_bitmap);
-	if (no == block_bitmap.ntotal)
+	uint64_t no = bitmap_alloc(&block_alloc.bitmap);
+	if (no == block_alloc.bitmap.ntotal)
 		return BPFS_BLOCKNO_INVALID;
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	assert(no + 1 >= BPFS_BLOCKNO_FIRST_ALLOC);
@@ -524,7 +550,7 @@ static uint64_t alloc_block(void)
 static bool block_freshly_alloced(uint64_t blockno)
 {
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
-	return staged_list_freshly_alloced(block_bitmap.allocs, blockno - 1);
+	return staged_list_freshly_alloced(block_alloc.bitmap.allocs, blockno - 1);
 }
 #endif
 
@@ -532,7 +558,7 @@ static void set_block(uint64_t blockno)
 {
 	assert(blockno != BPFS_BLOCKNO_INVALID);
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
-	bitmap_set(&block_bitmap, blockno - 1);
+	bitmap_set(&block_alloc.bitmap, blockno - 1);
 }
 
 static void free_block(uint64_t blockno)
@@ -540,7 +566,7 @@ static void free_block(uint64_t blockno)
 	assert(blockno != BPFS_BLOCKNO_INVALID);
 	assert(blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
-	bitmap_free(&block_bitmap, blockno - 1);
+	bitmap_free(&block_alloc.bitmap, blockno - 1);
 #if DETECT_STRAY_ACCESSES
 	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_NONE));
 #else
@@ -557,10 +583,10 @@ static void protect_bpram_abort(void)
 {
 #if DETECT_STRAY_ACCESSES
 	struct staged_entry *cur;
-	for (cur = block_bitmap.frees; cur; cur = cur->next)
+	for (cur = block_alloc.bitmap.frees; cur; cur = cur->next)
 		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
 		                  BPFS_BLOCK_SIZE, PROT_INUSE_OLD));
-	for (cur = block_bitmap.allocs; cur; cur = cur->next)
+	for (cur = block_alloc.bitmap.allocs; cur; cur = cur->next)
 		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
 		                  BPFS_BLOCK_SIZE, PROT_NONE));
 #elif DETECT_NONCOW_WRITES
@@ -573,7 +599,7 @@ static void protect_bpram_commit(void)
 #if DETECT_NONCOW_WRITES
 # if DETECT_STRAY_ACCESSES
 	struct staged_entry *cur;
-	for (cur = block_bitmap.allocs; cur; cur = cur->next)
+	for (cur = block_alloc.bitmap.allocs; cur; cur = cur->next)
 		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
 		                  BPFS_BLOCK_SIZE, PROT_READ));
 # else
@@ -585,13 +611,13 @@ static void protect_bpram_commit(void)
 static void abort_blocks(void)
 {
 	protect_bpram_abort();
-	bitmap_abort(&block_bitmap);
+	bitmap_abort(&block_alloc.bitmap);
 }
 
 static void commit_blocks(void)
 {
 	protect_bpram_commit();
-	bitmap_commit(&block_bitmap);
+	bitmap_commit(&block_alloc.bitmap);
 }
 
 static char* get_block(uint64_t blockno)
@@ -616,7 +642,7 @@ static bool block_is_alloced(uint64_t blockno)
 {
 	xassert(blockno != BPFS_BLOCKNO_INVALID);
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
-	return bitmap_is_alloced(&block_bitmap, blockno - 1);
+	return bitmap_is_alloced(&block_alloc.bitmap, blockno - 1);
 }
 #endif
 
@@ -716,7 +742,11 @@ static struct bpfs_tree_root* get_inode_root(void)
 	return (struct bpfs_tree_root*) get_block(bpfs_super->inode_root_addr);
 }
 
-static struct bitmap inode_bitmap;
+struct inode_allocation {
+	struct bitmap bitmap;
+};
+
+static struct inode_allocation inode_alloc;
 
 static int init_inode_allocations(void)
 {
@@ -725,13 +755,19 @@ static int init_inode_allocations(void)
 	// This code assumes that inodes are contiguous in the inode tree
 	static_assert(!(BPFS_BLOCK_SIZE % sizeof(struct bpfs_inode)));
 
-	return bitmap_init(&inode_bitmap, NBLOCKS_FOR_NBYTES(inode_root->nbytes)
-	                                  * BPFS_INODES_PER_BLOCK);
+	return bitmap_init(&inode_alloc.bitmap,
+	                   NBLOCKS_FOR_NBYTES(inode_root->nbytes)
+	                   * BPFS_INODES_PER_BLOCK);
 }
 
 static void destroy_inode_allocations(void)
 {
-	bitmap_destroy(&inode_bitmap);
+	bitmap_destroy(&inode_alloc.bitmap);
+}
+
+static void move_inode_allocations(struct inode_allocation *dst, struct inode_allocation *org)
+{
+	bitmap_move(&dst->bitmap, &org->bitmap);
 }
 
 static int callback_init_inodes(uint64_t blockoff, char *block,
@@ -753,18 +789,18 @@ static int callback_init_inodes(uint64_t blockoff, char *block,
 
 static uint64_t alloc_inode(void)
 {
-	uint64_t no = bitmap_alloc(&inode_bitmap);
-	if (no == inode_bitmap.ntotal)
+	uint64_t no = bitmap_alloc(&inode_alloc.bitmap);
+	if (no == inode_alloc.bitmap.ntotal)
 	{
 		struct bpfs_tree_root *inode_root = get_inode_root();
 		if (crawl_inodes(inode_root->nbytes, inode_root->nbytes, COMMIT_ATOMIC,
 		                 callback_init_inodes, NULL) < 0)
 			return BPFS_INO_INVALID;
 		inode_root = get_inode_root();
-		xcall(bitmap_resize(&inode_bitmap,
+		xcall(bitmap_resize(&inode_alloc.bitmap,
 		                    inode_root->nbytes / sizeof(struct bpfs_inode)));
-		no = bitmap_alloc(&inode_bitmap);
-		assert(no != inode_bitmap.ntotal);
+		no = bitmap_alloc(&inode_alloc.bitmap);
+		assert(no != inode_alloc.bitmap.ntotal);
 	}
 	static_assert(BPFS_INO_INVALID == 0);
 	return no + 1;
@@ -774,24 +810,24 @@ static void set_inode(uint64_t ino)
 {
 	assert(ino != BPFS_INO_INVALID);
 	static_assert(BPFS_INO_INVALID == 0);
-	bitmap_set(&inode_bitmap, ino - 1);
+	bitmap_set(&inode_alloc.bitmap, ino - 1);
 }
 
 static void free_inode(uint64_t ino)
 {
 	assert(ino != BPFS_INO_INVALID);
 	static_assert(BPFS_INO_INVALID == 0);
-	bitmap_free(&inode_bitmap, ino - 1);
+	bitmap_free(&inode_alloc.bitmap, ino - 1);
 }
 
 static void abort_inodes(void)
 {
-	bitmap_abort(&inode_bitmap);
+	bitmap_abort(&inode_alloc.bitmap);
 }
 
 static void commit_inodes(void)
 {
-	bitmap_commit(&inode_bitmap);
+	bitmap_commit(&inode_alloc.bitmap);
 }
 
 static int get_inode_offset(uint64_t ino, uint64_t *poffset)
@@ -808,7 +844,7 @@ static int get_inode_offset(uint64_t ino, uint64_t *poffset)
 	static_assert(BPFS_INO_INVALID == 0);
 	no = ino - 1;
 
-	if (no >= inode_bitmap.ntotal)
+	if (no >= inode_alloc.bitmap.ntotal)
 	{
 		assert(0);
 		return -EINVAL;
@@ -1741,6 +1777,23 @@ static void destroy_allocations(void)
 	destroy_block_allocations();
 }
 
+struct allocation {
+	struct inode_allocation inode;
+	struct block_allocation block;
+};
+
+static void stash_destroy_allocations(struct allocation *alloc)
+{
+	move_inode_allocations(&alloc->inode, &inode_alloc);
+	move_block_allocations(&alloc->block, &block_alloc);
+}
+
+static void destroy_restore_allocations(struct allocation *alloc)
+{
+	move_inode_allocations(&inode_alloc, &alloc->inode);
+	move_block_allocations(&block_alloc, &alloc->block);
+}
+
 
 //
 // commit, abort, and recover
@@ -1848,7 +1901,7 @@ static void print_bitmap_differences(const char *name,
 {
 	size_t i;
 	printf("%s bitmap differences (-1):", name);
-	for (i = 0; i < block_bitmap.ntotal; i++)
+	for (i = 0; i < block_alloc.bitmap.ntotal; i++)
 	{
 		bool orig = !!(orig_bitmap[i / 8] & (1 << i % 8));
 		bool disc = !!(disc_bitmap[i / 8] & (1 << i % 8));
@@ -1867,40 +1920,44 @@ static void detect_allocation_diffs(void)
 	bool diff = false;
 
 	/* non-NULL would complicate destory+init+compare */
-	assert(!block_bitmap.allocs);
-	assert(!block_bitmap.frees);
-	assert(!inode_bitmap.allocs);
-	assert(!inode_bitmap.frees);
+	assert(!block_alloc.bitmap.allocs);
+	assert(!block_alloc.bitmap.frees);
+	assert(!inode_alloc.bitmap.allocs);
+	assert(!inode_alloc.bitmap.frees);
 
-	orig_block_bitmap = malloc(block_bitmap.ntotal / 8);
+	orig_block_bitmap = malloc(block_alloc.bitmap.ntotal / 8);
 	xassert(orig_block_bitmap);
-	memcpy(orig_block_bitmap, block_bitmap.bitmap, block_bitmap.ntotal / 8);
-	orig_block_ntotal = block_bitmap.ntotal;
+	memcpy(orig_block_bitmap, block_alloc.bitmap.bitmap,
+	       block_alloc.bitmap.ntotal / 8);
+	orig_block_ntotal = block_alloc.bitmap.ntotal;
 
-	orig_inode_bitmap = malloc(inode_bitmap.ntotal / 8);
+	orig_inode_bitmap = malloc(inode_alloc.bitmap.ntotal / 8);
 	xassert(orig_inode_bitmap);
-	memcpy(orig_inode_bitmap, inode_bitmap.bitmap, inode_bitmap.ntotal / 8);
-	orig_inode_ntotal = inode_bitmap.ntotal;
+	memcpy(orig_inode_bitmap, inode_alloc.bitmap.bitmap,
+	       inode_alloc.bitmap.ntotal / 8);
+	orig_inode_ntotal = inode_alloc.bitmap.ntotal;
 
 	destroy_allocations();
 	init_allocations();
 
-	assert(orig_block_ntotal == block_bitmap.ntotal);
-	if (memcmp(orig_block_bitmap, block_bitmap.bitmap, block_bitmap.ntotal / 8))
+	assert(orig_block_ntotal == block_alloc.bitmap.ntotal);
+	if (memcmp(orig_block_bitmap, block_alloc.bitmap.bitmap,
+	           block_alloc.bitmap.ntotal / 8))
 	{
 		diff = true;
 		print_bitmap_differences("block",
-		                         orig_block_bitmap, block_bitmap.bitmap,
-		                         block_bitmap.ntotal);
+		                         orig_block_bitmap, block_alloc.bitmap.bitmap,
+		                         block_alloc.bitmap.ntotal);
 	}
 
-	assert(orig_inode_ntotal == inode_bitmap.ntotal);
-	if (memcmp(orig_inode_bitmap, inode_bitmap.bitmap, inode_bitmap.ntotal / 8))
+	assert(orig_inode_ntotal == inode_alloc.bitmap.ntotal);
+	if (memcmp(orig_inode_bitmap, inode_alloc.bitmap.bitmap,
+	           inode_alloc.bitmap.ntotal / 8))
 	{
 		diff = true;
 		print_bitmap_differences("inodes",
-		                         orig_inode_bitmap, inode_bitmap.bitmap,
-		                         inode_bitmap.ntotal);
+		                         orig_inode_bitmap, inode_alloc.bitmap.bitmap,
+		                         inode_alloc.bitmap.ntotal);
 	}
 
 	assert(!diff);
@@ -2398,10 +2455,10 @@ static void fuse_statfs(fuse_req_t req, fuse_ino_t ino)
 	stv.f_frsize = BPFS_BLOCK_SIZE;
 	static_assert(sizeof(stv.f_blocks) >= sizeof(bpfs_super->nblocks));
 	stv.f_blocks = bpfs_super->nblocks;
-	stv.f_bfree = block_bitmap.nfree;
+	stv.f_bfree = block_alloc.bitmap.nfree;
 	stv.f_bavail = stv.f_bfree; // NOTE: no space reserved for root
-	stv.f_files = inode_bitmap.ntotal - inode_bitmap.nfree;
-	stv.f_ffree = inode_bitmap.nfree;
+	stv.f_files = inode_alloc.bitmap.ntotal - inode_alloc.bitmap.nfree;
+	stv.f_ffree = inode_alloc.bitmap.nfree;
 	stv.f_favail = stv.f_ffree; // NOTE: no space reserved for root
 	memset(&stv.f_fsid, 0, sizeof(stv.f_fsid)); // TODO: good enough?
 	stv.f_flag = 0; // TODO: check for flags (see mount(8))
@@ -3605,6 +3662,26 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 
 
 //
+// random fsck
+
+void random_fsck(int signo)
+{
+	struct allocation alloc;
+	struct itimerval itv;
+
+	stash_destroy_allocations(&alloc);
+	init_allocations();
+	destroy_restore_allocations(&alloc);
+	printf("fsck passed\n");
+
+	memset(&itv, 0, sizeof(itv));
+	static_assert(RFSCK_MAX_INTERVAL <= RAND_MAX);
+	itv.it_value.tv_usec = rand() % RFSCK_MAX_INTERVAL;
+	xsyscall(setitimer(ITIMER_VIRTUAL, &itv, NULL));
+}
+
+
+//
 // persistent bpram
 
 static int bpram_fd = -1;
@@ -3763,6 +3840,30 @@ int main(int argc, char **argv)
 				                  BPFS_BLOCK_SIZE, PROT_INUSE_OLD));
 	}
 #endif
+
+	if (getenv("RFSCK"))
+	{
+#if BLOCK_POISON
+		printf("Not enabling random fsck: BLOCK_POISON is enabled.\n");
+#else
+		struct itimerval itv;
+
+		if (!strcmp(getenv("RFSCK"), ""))
+			srand(time(NULL));
+		else
+			srand(atoi(getenv("RFSCK")));
+
+		xsyscall(getitimer(ITIMER_VIRTUAL, &itv));
+		if (itv.it_value.tv_sec || itv.it_value.tv_usec)
+			printf("ITIMER_VIRTUAL already in use. Not enabling random fsck.\n");
+		else
+		{
+			xassert(!signal(SIGVTALRM, random_fsck));
+			// start the timer (and needlessly do an fsck):
+			random_fsck(SIGVTALRM);
+		}
+#endif
+	}
 
 #if BLOCK_POISON
 	printf("Block poisoning enabled. Write counting will be incorrect.\n");
