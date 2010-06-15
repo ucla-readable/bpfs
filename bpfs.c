@@ -793,8 +793,8 @@ static uint64_t alloc_inode(void)
 	if (no == inode_alloc.bitmap.ntotal)
 	{
 		struct bpfs_tree_root *inode_root = get_inode_root();
-		if (crawl_inodes(inode_root->nbytes, inode_root->nbytes, COMMIT_ATOMIC,
-		                 callback_init_inodes, NULL) < 0)
+		if (crawl_inodes(inode_root->nbytes, inode_root->nbytes,
+		                 COMMIT_ATOMIC_R, callback_init_inodes, NULL) < 0)
 			return BPFS_INO_INVALID;
 		inode_root = get_inode_root();
 		xcall(bitmap_resize(&inode_alloc.bitmap,
@@ -2094,7 +2094,7 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
   found:
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		uint64_t new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2146,7 +2146,7 @@ static int alloc_dirent(uint64_t parent_ino, struct str_dirent *sd)
 {
 	int r;
 
-	r = crawl_data(parent_ino, 0, BPFS_EOF, COMMIT_ATOMIC,
+	r = crawl_data(parent_ino, 0, BPFS_EOF, COMMIT_ATOMIC_R,
 	               callback_dirent_plug, sd);
 	if (r < 0)
 		return r;
@@ -2154,7 +2154,7 @@ static int alloc_dirent(uint64_t parent_ino, struct str_dirent *sd)
 	if (!r)
 	{
 		r = crawl_data(parent_ino, BPFS_EOF, BPFS_BLOCK_SIZE,
-		               COMMIT_ATOMIC, callback_dirent_append, sd);
+		               COMMIT_ATOMIC_R, callback_dirent_append, sd);
 		if (r < 0)
 			return r;
 	}
@@ -2174,7 +2174,7 @@ static int callback_set_dirent_ino(uint64_t blockoff, char *block,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		uint64_t new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2199,7 +2199,7 @@ static int callback_clear_dirent_ino(uint64_t blockoff, char *block,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		uint64_t new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2233,7 +2233,7 @@ static int callback_addrem_dirent(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2242,6 +2242,8 @@ static int callback_addrem_dirent(char *block, unsigned off,
 	}
 	inode = (struct bpfs_inode*) (block + off);
 
+	// TODO: for SCSP need to commit the nlink change and dirent_callback
+	// atomically. Optimize away this COW?
 	if (cadd->dir)
 	{
 		if (cadd->add)
@@ -2274,8 +2276,7 @@ static int callback_init_inode(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	// TODO: only for SP?
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2309,7 +2310,7 @@ static int callback_set_cmtime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2354,11 +2355,11 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	if ((r = alloc_dirent(parent_ino, &sd)) < 0)
 		return r;
 
-	r = crawl_inode(ino, COMMIT_COPY, callback_init_inode, &ciid);
+	r = crawl_inode(ino, COMMIT_ATOMIC_R, callback_init_inode, &ciid);
 	if (r < 0)
 		return r;
 
-	r = crawl_inode(parent_ino, COMMIT_COPY,
+	r = crawl_inode(parent_ino, COMMIT_ATOMIC_R,
 	                callback_set_cmtime, &get_inode(ino)->mtime);
 	if (r < 0)
 		return r;
@@ -2404,11 +2405,9 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	sd.dirent->file_type = f2b_filetype(mode);
 
 	// Set sd.dirent->ino and, if S_ISDIR, increment parent->nlinks.
-	// Could do this atomically if we didn't store parent->nlinks.
-	// TODO: optimize away this COW?
 	cadd.dirent_off = sd.dirent_off;
 	cadd.ino = ino;
-	r = crawl_inode(parent_ino, COMMIT_COPY, callback_addrem_dirent, &cadd);
+	r = crawl_inode(parent_ino, COMMIT_ATOMIC_R, callback_addrem_dirent, &cadd);
 	if (r < 0)
 		return r;
 
@@ -2876,12 +2875,12 @@ static int do_unlink(uint64_t parent_ino, uint64_t dirent_off, uint64_t child_in
 	child = get_inode(child_ino);
 	assert(child);
 	cadd = (struct callback_addrem_dirent_data) {false, dirent_off, BPFS_INO_INVALID, BPFS_S_ISDIR(child->mode)};
-	r = crawl_inode(parent_ino, COMMIT_ATOMIC,
+	r = crawl_inode(parent_ino, COMMIT_ATOMIC_R,
 	                callback_addrem_dirent, &cadd);
 	if (r < 0)
 		return r;
 
-	r = crawl_inode(parent_ino, COMMIT_ATOMIC,
+	r = crawl_inode(parent_ino, COMMIT_ATOMIC_R,
 	                callback_set_cmtime, &time_now);
 	if (r < 0)
 		return r;
@@ -3020,7 +3019,7 @@ static int callback_set_ctime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -3044,7 +3043,7 @@ static int callback_change_nlinks(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -3257,7 +3256,7 @@ static int callback_set_atime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE)
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -3327,7 +3326,7 @@ static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
 	if (r < 0)
 		goto abort;
 
-	r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_atime, &time_now);
+	r = crawl_inode(ino, COMMIT_ATOMIC_R, callback_set_atime, &time_now);
 	if (r < 0)
 		goto abort;
 
@@ -3475,7 +3474,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 	r = crawl_data(ino, off, size, COMMIT_NONE, callback_read, iov);
 	assert(r >= 0);
 
-	r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_atime, &time_now);
+	r = crawl_inode(ino, COMMIT_ATOMIC_R, callback_set_atime, &time_now);
 	if (r < 0)
 		goto abort;
 
@@ -3524,7 +3523,7 @@ static int callback_set_mtime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE && (!COW_OPT_R || commit != COMMIT_ATOMIC_R))
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
