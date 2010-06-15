@@ -3672,7 +3672,7 @@ void random_fsck(int signo)
 	stash_destroy_allocations(&alloc);
 	init_allocations();
 	destroy_restore_allocations(&alloc);
-	printf("fsck passed\n");
+	Dprintf("fsck passed\n");
 
 	memset(&itv, 0, sizeof(itv));
 	static_assert(RFSCK_MAX_INTERVAL <= RAND_MAX);
