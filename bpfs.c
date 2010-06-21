@@ -2548,6 +2548,7 @@ static int truncate_block_zero_leaf(uint64_t prev_blockno, uint64_t begin,
 	uint64_t blockno = prev_blockno;
 	char *block;
 
+	assert(valid <= begin);
 	assert(begin < end);
 	assert(end <= BPFS_BLOCK_SIZE);
 
@@ -2571,12 +2572,11 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 	uint64_t blockno = prev_blockno;
 	struct bpfs_indir_block *indir = (struct bpfs_indir_block*) get_block(blockno);
 	uint64_t child_max_nblocks = max_nblocks / BPFS_BLOCKNOS_PER_INDIR;
-	uint64_t beginno = begin / (BPFS_BLOCK_SIZE * child_max_nblocks);
-	bool begin_aligned = !(begin % (BPFS_BLOCK_SIZE * child_max_nblocks));
-	uint64_t endno = (end + BPFS_BLOCK_SIZE * child_max_nblocks - 1)
-	                 / (BPFS_BLOCK_SIZE * child_max_nblocks);
-	uint64_t validno = (valid + BPFS_BLOCK_SIZE * child_max_nblocks - 1)
-	                   / (BPFS_BLOCK_SIZE * child_max_nblocks);
+	uint64_t child_max_nbytes = BPFS_BLOCK_SIZE * child_max_nblocks;
+	uint64_t validno = (valid + child_max_nbytes - 1) / child_max_nbytes;
+	uint64_t beginno = begin / child_max_nbytes;
+	uint64_t endno = (end + child_max_nbytes - 1) / child_max_nbytes;
+	bool begin_aligned = !(begin % child_max_nbytes);
 	uint64_t no;
 
 	assert(valid <= begin);
@@ -2596,11 +2596,10 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 		if (indir->addr[no] != BPFS_BLOCKNO_INVALID)
 			indir->addr[no] = BPFS_BLOCKNO_INVALID;
 
-	if (begin_aligned || beginno <= validno)
+	if (begin_aligned)
 		indir->addr[beginno] = BPFS_BLOCKNO_INVALID;
 	else if (indir->addr[beginno] != BPFS_BLOCKNO_INVALID)
 	{
-		uint64_t child_max_nbytes = child_max_nblocks * BPFS_BLOCK_SIZE;
 		uint64_t child_begin = begin - beginno * child_max_nbytes;
 		uint64_t child_end = MIN(end - beginno * child_max_nbytes,
 		                         child_max_nbytes);
@@ -2609,8 +2608,7 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 		int r;
 
 		if (beginno + 1 == validno)
-			valid = MIN(valid - beginno * child_max_nbytes,
-			            child_max_nbytes * BPFS_BLOCK_SIZE);
+			valid = MIN(valid - beginno * child_max_nbytes, child_max_nbytes);
 		else
 		{
 			assert(validno < beginno + 1);
