@@ -1314,6 +1314,7 @@ static void crawl_blocknos(const struct bpfs_tree_root *root,
                            crawl_blockno_callback callback)
 {
 	uint64_t max_nblocks = tree_max_nblocks(root->ha.height);
+	uint64_t max_nbytes = max_nblocks * BPFS_BLOCK_SIZE;
 	uint64_t valid;
 
 	/* convenience */
@@ -1328,8 +1329,8 @@ static void crawl_blocknos(const struct bpfs_tree_root *root,
 	if (!(off + size))
 		return;
 
-	size = MIN(size, max_nblocks * BPFS_BLOCK_SIZE - off);
-	valid = MIN(root->nbytes, max_nblocks * BPFS_BLOCK_SIZE);
+	size = MIN(size, max_nbytes - off);
+	valid = MIN(root->nbytes, max_nbytes);
 
 
 	if (!root->ha.height)
@@ -2695,6 +2696,15 @@ static int truncate_block_zero(struct bpfs_tree_root *root,
 	return 0;
 }
 
+static unsigned count_bits(unsigned x)
+{
+	unsigned n = 0;
+	unsigned i;
+	for (i = 0; i < 8 * sizeof(x); i++)
+		n += !!(x & i);
+	return n;
+}
+
 struct callback_setattr_data {
 	struct stat *attr;
 	int to_set;
@@ -2714,9 +2724,7 @@ static int callback_setattr(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	// TODO: avoid COW when COMMIT_ATOMIC_R and can change atomically.
-	// what is the ovehead of not avoiding COWs?
-	if (commit != COMMIT_FREE)
+	if (commit != COMMIT_FREE && count_bits(to_set) > 1)
 	{
 		new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2742,12 +2750,11 @@ static int callback_setattr(char *block, unsigned off,
 			{
 				truncate_block_free(&inode->root, attr->st_size);
 
-				// TODO: change FREE to ATOMIC_R as part of optimizing to COW
-				// TODO: free blocks not along the trunk (or already happening?)
-				// TODO: change size first, so don't have sparse blocks
+				inode->root.nbytes = attr->st_size;
+
 				r = tree_change_height(&inode->root,
 				                       tree_height(NBLOCKS_FOR_NBYTES(attr->st_size)),
-				                       COMMIT_FREE, &new_blockno2);
+				                       COMMIT_ATOMIC_R, &new_blockno2);
 				if (r < 0)
 					return r;
 				assert(new_blockno == new_blockno2);
@@ -2760,9 +2767,9 @@ static int callback_setattr(char *block, unsigned off,
 			if (r < 0)
 				return r;
 			assert(new_blockno == new_blockno2);
-		}
 
-		inode->root.nbytes = attr->st_size;
+			inode->root.nbytes = attr->st_size;
+		}
 	}
 	if (to_set & FUSE_SET_ATTR_ATIME)
 		inode->atime.sec = attr->st_atime;
@@ -2780,6 +2787,7 @@ static int callback_setattr(char *block, unsigned off,
 static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
                          int to_set, struct fuse_file_info *fi)
 {
+	static const int supported = FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID | FUSE_SET_ATTR_SIZE | FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME;
 	struct callback_setattr_data csd = {attr, to_set};
 	struct stat stbuf;
 	int r;
@@ -2802,7 +2810,8 @@ static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 
 	// Why are bits 6, 7, and 8 set?
 	// in fuse 2.8.1, 7 is atime_now and 8 is mtime_now. 6 is skipped.
-	// assert(!(to_set & ~(FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID | FUSE_SET_ATTR_SIZE | FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME)));
+	// assert(!(to_set & ~supported));
+	to_set &= supported;
 
 	r = crawl_inode(ino, COMMIT_ATOMIC_R, callback_setattr, &csd);
 	if (r < 0)
