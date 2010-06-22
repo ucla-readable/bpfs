@@ -1279,7 +1279,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		{
 			assert(commit != COMMIT_NONE);
 			// TODO: opt: no need to copy if writing to invalid entries
-			if (!(prev_blockno != blockno || (COW_OPT && commit == COMMIT_ATOMIC && firstno == lastno)))
+			if (prev_blockno == blockno && !(COW_OPT_R && commit == COMMIT_ATOMIC_R && firstno == lastno))
 			{
 				// TODO: avoid copying data that will be overwritten?
 				if ((blockno = cow_block_entire(blockno)) == BPFS_BLOCKNO_INVALID)
@@ -1487,8 +1487,9 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 			else
 			{
 				inplace = commit == COMMIT_FREE;
-#if COW_OPT
-//				inplace ||= commit == COMMIT_ATOMIC;
+#if COW_OPT_R
+				static_assert(COMMIT_ATOMIC_R != COMMIT_COPY);
+				inplace = inplace || commit == COMMIT_ATOMIC_R;
 #endif
 			}
 
@@ -1497,8 +1498,8 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 				new_blockno = cow_block_entire(new_blockno);
 				if (new_blockno == BPFS_BLOCKNO_INVALID)
 					return -ENOSPC;
-				root = (struct bpfs_tree_root*) (get_block(new_blockno)
-				                                 + root_off);
+				root = (struct bpfs_tree_root*)
+				           (get_block(new_blockno) + root_off);
 			}
 
 			if (change_addr)
@@ -2552,7 +2553,7 @@ static int truncate_block_zero_leaf(uint64_t prev_blockno, uint64_t begin,
 	assert(begin < end);
 	assert(end <= BPFS_BLOCK_SIZE);
 
-#if !COW_OPT
+#if !COW_OPT_R
 	if ((blockno = cow_block(blockno, begin, end - begin, begin)) == BPFS_BLOCKNO_INVALID)
 		return -ENOSPC;
 #endif
@@ -2583,7 +2584,7 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 	assert(begin < end);
 	assert(end <= BPFS_BLOCK_SIZE * max_nblocks);
 
-#if !COW_OPT
+#if !COW_OPT_R
 	{
 		unsigned indir_valid = beginno * sizeof(*indir);
 		if ((blockno = cow_block(blockno, 0, 0, indir_valid)) == BPFS_BLOCKNO_INVALID)
@@ -2639,7 +2640,9 @@ static int truncate_block_zero(struct bpfs_tree_root *root,
 			                   uint64_t *blockno)
 {
 	uint64_t new_blockno = *blockno;
+#if !COW_OPT_R
 	unsigned root_off = block_offset(root);
+#endif
 	uint64_t max_nblocks = tree_max_nblocks(root->ha.height);
 	uint64_t max_nbytes = max_nblocks * BPFS_BLOCK_SIZE;
 	uint64_t child_blockno = root->ha.addr;
@@ -2663,7 +2666,7 @@ static int truncate_block_zero(struct bpfs_tree_root *root,
 	if (root->ha.addr == BPFS_BLOCKNO_INVALID)
 		return 0;
 
-#if !COW_OPT
+#if !COW_OPT_R
 	new_blockno = cow_block_entire(*blockno);
 	if (new_blockno == BPFS_BLOCKNO_INVALID)
 		return -ENOSPC;
@@ -2741,6 +2744,7 @@ static int callback_setattr(char *block, unsigned off,
 
 				// TODO: change FREE to ATOMIC_R as part of optimizing to COW
 				// TODO: free blocks not along the trunk (or already happening?)
+				// TODO: change size first, so don't have sparse blocks
 				r = tree_change_height(&inode->root,
 				                       tree_height(NBLOCKS_FOR_NBYTES(attr->st_size)),
 				                       COMMIT_FREE, &new_blockno2);
