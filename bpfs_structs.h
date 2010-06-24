@@ -7,7 +7,7 @@
 
 #define BPFS_FS_MAGIC 0xB9F5
 
-#define BPFS_STRUCT_VERSION 5
+#define BPFS_STRUCT_VERSION 6
 
 #define BPFS_BLOCK_SIZE 4096
 
@@ -92,7 +92,8 @@ struct bpfs_super
 	uint64_t inode_root_addr; // block number containing the inode tree root
 	uint64_t inode_root_addr_2; // only used with SP; for commit consistency
 	uint8_t commit_mode;
-	uint8_t pad[4047]; // pad to full block
+	uint8_t ephemeral_valid; // for SCSP, inode link count validity
+	uint8_t pad[4046]; // pad to full block
 };
 
 
@@ -116,7 +117,7 @@ struct bpfs_inode
 	uint32_t mode;
 	uint32_t uid;
 	uint32_t gid;
-	uint32_t nlinks;
+	uint32_t nlinks; // valid at mount iff bpfs_super.ephemeral_valid
 	uint64_t flags;
 	struct bpfs_tree_root root;
 	struct bpfs_time atime;

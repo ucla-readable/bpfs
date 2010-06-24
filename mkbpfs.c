@@ -51,6 +51,7 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	super->inode_root_addr = alloc_block(super);
 	super->inode_root_addr_2 = super->inode_root_addr; // not required for SCSP
 	super->commit_mode = BPFS_COMMIT_SCSP;
+	super->ephemeral_valid = 1;
 	memset(super->pad, 0, sizeof(super->pad));
 
 	if (super->nblocks > BPFS_TREE_ROOT_MAX_ADDR + 1)

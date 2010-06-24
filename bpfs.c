@@ -1725,15 +1725,16 @@ static void discover_tree_allocations(struct bpfs_tree_root *root)
 	}
 }
 
-static void discover_inode_allocations(uint64_t ino);
+static void discover_inode_allocations(uint64_t ino, bool mounting);
 
 static int callback_discover_inodes(uint64_t blockoff, char *block,
                                     unsigned off, unsigned size,
                                     unsigned valid, uint64_t crawl_start,
-                                    enum commit commit, void *user,
+                                    enum commit commit, void *mounting_void,
                                     uint64_t *blockno)
 {
 	unsigned start = off;
+	bool mounting = *((bool*) mounting_void);
 	while (off + BPFS_DIRENT_MIN_LEN <= start + size)
 	{
 		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
@@ -1743,39 +1744,91 @@ static int callback_discover_inodes(uint64_t blockoff, char *block,
 			break;
 		}
 		off += dirent->rec_len;
+
 		if (dirent->ino == BPFS_INO_INVALID)
-			continue;
-		if (!strcmp(dirent->name, ".."))
-			continue;
-		discover_inode_allocations(dirent->ino);
+		{
+			// ignore
+		}
+		else if (!strcmp(dirent->name, ".."))
+		{
+			if (mounting && !bpfs_super->ephemeral_valid)
+			{
+				struct bpfs_inode *parent_inode = get_inode(dirent->ino);
+				parent_inode->nlinks++;
+			}
+		}
+		else
+		{
+			discover_inode_allocations(dirent->ino, mounting);
+		}
 	}
 	return 0;
 }
 
-static void discover_inode_allocations(uint64_t ino)
+static void discover_inode_allocations(uint64_t ino, bool mounting)
 {
 	struct bpfs_inode *inode = get_inode(ino);
 
 	set_inode(ino);
+	if (mounting && !bpfs_super->ephemeral_valid)
+	{
+		inode->nlinks++;
+		if (BPFS_S_ISDIR(inode->mode))
+			inode->nlinks++; // for inode's "." dirent (not stored on disk)
+	}
 
 	// TODO: combine the inode and block discovery loops?
 	discover_tree_allocations(&inode->root);
 	if (BPFS_S_ISDIR(inode->mode))
 		xcall(crawl_data(ino, 0, BPFS_EOF, COMMIT_NONE,
-		                 callback_discover_inodes, NULL));
+		                 callback_discover_inodes, &mounting));
 }
 
-static int init_allocations(void)
+static int callback_reset_inodes_nlinks(uint64_t blockoff, char *block,
+                                        unsigned off, unsigned size,
+                                        unsigned valid, uint64_t crawl_start,
+                                        enum commit commit, void *user,
+                                        uint64_t *blockno)
+{
+	assert(!(off % sizeof(struct bpfs_inode)));
+	assert(commit == COMMIT_FREE || commit == COMMIT_ATOMIC);
+
+	for (; off + sizeof(struct bpfs_inode) <= size; off += sizeof(struct bpfs_inode))
+	{
+		struct bpfs_inode *inode = (struct bpfs_inode*) (block + off);
+		inode->nlinks = 0;
+	}
+	return 0;
+}
+
+static void reset_inodes_nlinks(void)
+{
+	xcall(crawl_inodes(0, get_inode_root()->nbytes, COMMIT_FREE,
+	                   callback_reset_inodes_nlinks, NULL));
+}
+
+static int init_allocations(bool mounting)
 {
 	uint64_t i;
+
 	xcall(init_block_allocations());
 	xcall(init_inode_allocations());
+
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	for (i = 1; i < BPFS_BLOCKNO_FIRST_ALLOC; i++)
 		set_block(i);
 	set_block(bpfs_super->inode_root_addr);
+
 	discover_tree_allocations(get_inode_root());
-	discover_inode_allocations(BPFS_INO_ROOT);
+
+	// Only reset inode nlinks during mounting so that we do not distrub
+	// write counting
+	if (mounting && !bpfs_super->ephemeral_valid)
+		reset_inodes_nlinks();
+	discover_inode_allocations(BPFS_INO_ROOT, mounting);
+	if (mounting && !bpfs_super->ephemeral_valid)
+		bpfs_super->ephemeral_valid = 1;
+
 	return 0;
 }
 
@@ -1879,14 +1932,12 @@ static void persist_superblock(void)
 #endif
 
 	staged_super.inode_root_addr_2        = staged_super.inode_root_addr;
-	persistent_super->inode_root_addr     = staged_super.inode_root_addr;
-	persistent_super->inode_root_addr_2   = staged_super.inode_root_addr;
-	epoch_barrier(); // keep at least one SB consistent during each update
-	persistent_super_2->inode_root_addr   = staged_super.inode_root_addr;
-	persistent_super_2->inode_root_addr_2 = staged_super.inode_root_addr;
 
-	assert(!memcmp(persistent_super,   &staged_super, sizeof(staged_super)));
-	assert(!memcmp(persistent_super_2, &staged_super, sizeof(staged_super)));
+	// persist the inode_root_addr{,_2} fields, but do so by copying
+	// all because !SCSP and to copy the ephemeral_valid field:
+	memcpy(persistent_super, &staged_super, sizeof(staged_super));
+	epoch_barrier(); // keep at least one SB consistent during each update
+	memcpy(persistent_super_2, &staged_super, sizeof(staged_super));
 
 # if DETECT_NONCOW_WRITES
 	{
@@ -1946,7 +1997,7 @@ static void detect_allocation_diffs(void)
 	orig_inode_ntotal = inode_alloc.bitmap.ntotal;
 
 	destroy_allocations();
-	init_allocations();
+	init_allocations(false);
 
 	assert(orig_block_ntotal == block_alloc.bitmap.ntotal);
 	if (memcmp(orig_block_bitmap, block_alloc.bitmap.bitmap,
@@ -2440,6 +2491,10 @@ static void fuse_init(void *userdata, struct fuse_conn_info *conn)
 static void fuse_destroy(void *userdata)
 {
 	Dprintf("%s()\n", __FUNCTION__);
+
+	if (!bpfs_super->ephemeral_valid)
+		bpfs_super->ephemeral_valid = 1;
+
 	bpfs_commit();
 }
 
@@ -3686,7 +3741,7 @@ void random_fsck(int signo)
 	struct itimerval itv;
 
 	stash_destroy_allocations(&alloc);
-	init_allocations();
+	init_allocations(false);
 	destroy_restore_allocations(&alloc);
 	Dprintf("fsck passed\n");
 
@@ -3841,9 +3896,14 @@ int main(int argc, char **argv)
 	// make sure code does not write into the block of zeros:
 	xsyscall(mprotect(zero_block, BPFS_BLOCK_SIZE, PROT_READ));
 
-	inform_pin_of_bpram(bpram, bpram_size);
+	xcall(init_allocations(true));
 
-	xcall(init_allocations());
+#if SCSP_ENABLED
+	// NOTE: could instead clear and set this field for each system call
+	bpfs_super[1].ephemeral_valid = bpfs_super->ephemeral_valid = 0;
+#endif
+
+	inform_pin_of_bpram(bpram, bpram_size);
 
 #if DETECT_STRAY_ACCESSES
 	xsyscall(mprotect(bpram, bpram_size, PROT_NONE));
