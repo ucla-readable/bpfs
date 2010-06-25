@@ -2301,8 +2301,6 @@ static int callback_addrem_dirent(char *block, unsigned off,
 	}
 	inode = (struct bpfs_inode*) (block + off);
 
-	// TODO: for SCSP need to commit the nlink change and dirent_callback
-	// atomically. Optimize away this COW?
 	if (cadd->dir)
 	{
 		if (cadd->add)
@@ -2313,9 +2311,12 @@ static int callback_addrem_dirent(char *block, unsigned off,
 
 	dirent_callback = cadd->add ? callback_set_dirent_ino : callback_clear_dirent_ino;
 	r = crawl_tree(&inode->root, cadd->dirent_off, 1,
-	               COMMIT_COPY, dirent_callback, &cadd->ino, &new_blockno);
+	               commit, dirent_callback, &cadd->ino, &new_blockno);
 	if (r < 0)
 		return r;
+#if SCSP_ENABLED
+	assert(*blockno == new_blockno);
+#endif
 
 	*blockno = new_blockno;
 	return 0;
