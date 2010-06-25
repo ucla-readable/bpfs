@@ -3221,7 +3221,7 @@ static void fuse_rename(fuse_req_t req,
 				goto abort;
 		}
 
-		r = crawl_data(dst_parent_ino, 0, 1, COMMIT_COPY,
+		r = crawl_data(dst_sd.dirent->ino, 0, 1, COMMIT_COPY,
 		               callback_set_dirent_ino, &dst_parent_ino);
 		if (r < 0)
 			goto abort;
