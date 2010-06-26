@@ -103,11 +103,8 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	root_dirent = (struct bpfs_dirent*) GET_BLOCK(root_inode->root.ha.addr);
 	static_assert(BPFS_INO_INVALID == 0);
 	memset(root_dirent, 0, BPFS_BLOCK_SIZE);
-	root_dirent->ino = BPFS_INO_ROOT;
-	root_dirent->file_type = BPFS_TYPE_DIR;
-	strcpy(root_dirent->name, "..");
-	root_dirent->name_len = strlen(root_dirent->name) + 1;
-	root_dirent->rec_len = BPFS_DIRENT_LEN(root_dirent->name_len);
+	root_dirent->ino = BPFS_INO_INVALID;
+	root_dirent->rec_len = BPFS_BLOCK_SIZE;
 
 	super->magic = BPFS_FS_MAGIC;
 	super_2->magic = BPFS_FS_MAGIC;
