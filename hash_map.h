@@ -1,9 +1,12 @@
-/* This file is part of Featherstitch. Featherstitch is copyright 2005-2007 The
+/* This file is part of Featherstitch. Featherstitch is copyright 2005-2010 The
  * Regents of the University of California. It is distributed under the terms of
  * version 2 of the GNU GPL. See the file LICENSE for details. */
 
 #ifndef FSTITCH_INC_HASH_MAP_H
 #define FSTITCH_INC_HASH_MAP_H
+
+#include <stdbool.h>
+#include <stddef.h>
 
 /* Set to check for illegal hash map modifications during iteration.
  * If hash map iteration code tries to deref bad pointers, try this. */

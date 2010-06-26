@@ -1,18 +1,19 @@
-/* This file is part of Featherstitch. Featherstitch is copyright 2005-2007 The
+/* This file is part of Featherstitch. Featherstitch is copyright 2005-2010 The
  * Regents of the University of California. It is distributed under the terms of
  * version 2 of the GNU GPL. See the file LICENSE for details. */
 
-#include <lib/platform.h>
-#include <lib/vector.h>
-#include <lib/hash_map.h>
-#include <lib/pool.h>
+#include "vector.h"
+#include "hash_map.h"
+#include "pool.h"
 
-#include <fscore/fstitchd.h>
+#include <assert.h>
+#include <errno.h>
+#include <string.h>
 
 #define HASH_MAP_DEBUG 0
 
 #if HASH_MAP_DEBUG
-#include <lib/stdio.h>
+#include <stdio.h>
 #define Dprintf(x...) printf(x)
 #else
 #define Dprintf(x...)
@@ -111,11 +112,6 @@ static __inline size_t hash(const hash_map_t * hm, const void * k)
 // Chains
 
 DECLARE_POOL(chain_elt, chain_elt_t);
-
-static void chain_elt_pool_free_all(void * ignore)
-{
-	chain_elt_free_all();
-}
 
 static chain_elt_t * chain_elt_create(const hash_map_t * hm, void * k, void * v)
 {
@@ -800,5 +796,5 @@ void * hash_map_val_next(hash_map_it_t * it)
 
 int hash_map_init(void)
 {
-	return fstitchd_register_shutdown_module(chain_elt_pool_free_all, NULL, SHUTDOWN_POSTMODULES);
+	return atexit(chain_elt_free_all);
 }

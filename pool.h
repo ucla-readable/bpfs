@@ -1,18 +1,22 @@
-/* This file is part of Featherstitch. Featherstitch is copyright 2005-2007 The
+/* This file is part of Featherstitch. Featherstitch is copyright 2005-2010 The
  * Regents of the University of California. It is distributed under the terms of
  * version 2 of the GNU GPL. See the file LICENSE for details. */
 
 #ifndef FSTITCH_LIB_POOL_H
 #define FSTITCH_LIB_POOL_H
 
-#include <lib/platform.h>
+#include <stdlib.h>
 
 // Set to 1 to use malloc() and free() instead of pools. Useful for debugging.
 #define POOL_MALLOC 0
 
 #if !POOL_MALLOC
 
+#define PAGE_SIZE 4096
+
 #define POOLSIZE(type) ((int) ((PAGE_SIZE - sizeof(void*)) / sizeof(type)))
+
+#define unlikely(x) __builtin_expect(!!(x), 1)
 
 // Create a pool, allocator, and deallocators for 'type'.
 // API: type* name_alloc(), name_free(type*), name_free_all().

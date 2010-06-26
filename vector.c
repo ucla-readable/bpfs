@@ -1,10 +1,13 @@
-/* This file is part of Featherstitch. Featherstitch is copyright 2005-2008 The
+/* This file is part of Featherstitch. Featherstitch is copyright 2005-2010 The
  * Regents of the University of California. It is distributed under the terms of
  * version 2 of the GNU GPL. See the file LICENSE for details. */
 
-#include <lib/platform.h>
-#include <lib/vector.h>
+#include "vector.h"
 
+#include <assert.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 
 static void ** vector_create_elts(size_t n);
 static void    vector_destroy_elts(vector_t * v);
@@ -12,6 +15,8 @@ static int     vector_grow(vector_t * v);
 
 # define INIT_CAPACITY 10
 
+#define smalloc(n) malloc(n)
+#define sfree(v, n) free(v)
 
 //
 // Construction/destruction
