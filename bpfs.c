@@ -3240,6 +3240,8 @@ static void fuse_rename(fuse_req_t req,
 	struct bpfs_time time_now = BPFS_TIME_NOW();
 	uint64_t invalid_ino = BPFS_INO_INVALID;
 	uint64_t unlinked_ino = BPFS_INO_INVALID;
+	uint64_t child_ino;
+	uint8_t child_file_type;
 	bool dst_existed;
 	int r;
 
@@ -3250,6 +3252,11 @@ static void fuse_rename(fuse_req_t req,
 	r = find_dirent(src_parent_ino, &src_sd);
 	if (r < 0)
 		goto abort;
+
+	// Copy src dirent fields since changing it may CoW it
+	child_ino = src_sd.dirent->ino;
+	child_file_type = src_sd.dirent->file_type;
+	src_sd.dirent = NULL; // make it easy to catch accidental uses
 
 	(void) find_dirent(dst_parent_ino, &dst_sd);
 	dst_existed = !!dst_sd.dirent;
@@ -3264,9 +3271,6 @@ static void fuse_rename(fuse_req_t req,
 		r = alloc_dirent(dst_parent_ino, &dst_sd);
 		if (r < 0)
 			goto abort;
-		// May be necessary:
-		src_sd.dirent = get_dirent(src_parent_ino, src_sd.dirent_off);
-		assert(src_sd.dirent);
 
 #if !SCSP_ENABLED
 		assert(block_freshly_alloced(bpram_blockno(dst_sd.dirent)));
@@ -3274,7 +3278,7 @@ static void fuse_rename(fuse_req_t req,
 		// TODO: the assignment to dst_sd.dirent assumes that it is not
 		// yet referenced yet. Assert this (how?) or remove this assumption.
 #endif
-		dst_sd.dirent->file_type = src_sd.dirent->file_type;
+		dst_sd.dirent->file_type = child_file_type;
 	}
 
 	// TODO: change the below crawls from COMMIT_COPY to COMMIT_ATOMIC.
@@ -3288,7 +3292,7 @@ static void fuse_rename(fuse_req_t req,
 #endif
 
 	r = crawl_data(dst_parent_ino, dst_sd.dirent_off, 1, COMMIT_COPY,
-	               callback_set_dirent_ino, &src_sd.dirent->ino);
+	               callback_set_dirent_ino, &child_ino);
 	if (r < 0)
 		goto abort;
 	r = crawl_data(src_parent_ino, src_sd.dirent_off, 1, COMMIT_COPY,
@@ -3304,7 +3308,7 @@ static void fuse_rename(fuse_req_t req,
 	if (r < 0)
 		goto abort;
 
-	if (dst_sd.dirent->file_type == BPFS_TYPE_DIR)
+	if (child_file_type == BPFS_TYPE_DIR)
 	{
 		int nlinks_delta = -1;
 
@@ -3324,7 +3328,7 @@ static void fuse_rename(fuse_req_t req,
 		// Update the child ino's ctime because rename can change its
 		// ".." dirent's ino field. We would make this field update here,
 		// but the ".." dirent is computed on the fly and not stored on disk.
-		r = crawl_inode(dst_sd.dirent->ino, COMMIT_COPY,
+		r = crawl_inode(child_ino, COMMIT_COPY,
 		                callback_set_ctime, &time_now);
 		if (r < 0)
 			goto abort;
