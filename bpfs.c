@@ -3231,6 +3231,44 @@ static int callback_change_nlinks(char *block, unsigned off,
 	return 0;
 }
 
+#if SCSP_ENABLED
+
+// Infrastructure to atomically commit multiple copy-based crawls in SCSP mode
+
+static struct bpfs_super txn_tmp_super;
+static struct bpfs_super *txn_persistent_super;
+
+static void bpfs_txn_start(void)
+{
+	assert(!txn_persistent_super);
+
+	memcpy(&txn_tmp_super, bpfs_super, sizeof(*bpfs_super));
+	txn_persistent_super = bpfs_super;
+	bpfs_super = &txn_tmp_super;
+}
+
+static void bpfs_txn_commit(void)
+{
+	assert(bpfs_super == &txn_tmp_super && txn_persistent_super);
+
+	txn_persistent_super->inode_root_addr = txn_tmp_super.inode_root_addr;
+	assert(!memcmp(txn_persistent_super, &txn_tmp_super,
+	               sizeof(txn_tmp_super)));
+
+	bpfs_super = txn_persistent_super;
+	txn_persistent_super = NULL;
+}
+
+static void bpfs_txn_revert(void)
+{
+	assert(bpfs_super == &txn_tmp_super && txn_persistent_super);
+
+	bpfs_super = txn_persistent_super;
+	txn_persistent_super = NULL;
+}
+
+#endif
+
 static void fuse_rename(fuse_req_t req,
                         fuse_ino_t src_parent_ino, const char *src_name,
                         fuse_ino_t dst_parent_ino, const char *dst_name)
@@ -3281,30 +3319,43 @@ static void fuse_rename(fuse_req_t req,
 		dst_sd.dirent->file_type = child_file_type;
 	}
 
-	// TODO: change the below crawls from COMMIT_COPY to COMMIT_ATOMIC.
-	// Or, do they need to COW?
-
 #if 0
-	// TODO: combine alloc_dirent() into this crawl
 	crawl_inode_2(src_parent_ino, src_dirent_off, src_dirent->rec_len,
 				  dst_parent_ino, dst_dirent_off, dst_dirent->rec_len,
 				  COMMIT_ATOMIC, callback_rename);
+	// or perhaps:
+	crawl_inode_2(src_parent_ino, src_dirent_off, src_dirent->rec_len,
+	              callback_set_dirent_ino, &src_ino,
+	              dst_parent_ino, dst_dirent_off, dst_dirent->rec_len,
+	              callback_set_dirent_ino, &invalid_ino,
+	              COMMIT_ATOMIC);
 #endif
 
+	// TODO: optimize changing these two directory entries in SCSP mode
+	// by only CoWing to the dirent's nearest common parent.
+	// Doing this will probably require implementing crawl_inode_2().
+#if SCSP_ENABLED
+	bpfs_txn_start();
+#endif
 	r = crawl_data(dst_parent_ino, dst_sd.dirent_off, 1, COMMIT_COPY,
 	               callback_set_dirent_ino, &child_ino);
 	if (r < 0)
-		goto abort;
+		goto abort_parent_ino;
 	r = crawl_data(src_parent_ino, src_sd.dirent_off, 1, COMMIT_COPY,
 	               callback_set_dirent_ino, &invalid_ino);
 	if (r < 0)
-		goto abort;
+		goto abort_parent_ino;
+#if SCSP_ENABLED
+	bpfs_txn_commit();
+#endif
 
 	// FIXME: should we also update ctime for dst_ino and src_ino? ext4 does.
-	r = crawl_inode(dst_parent_ino, COMMIT_COPY, callback_set_cmtime, &time_now);
+	r = crawl_inode(dst_parent_ino, COMMIT_ATOMIC, callback_set_cmtime,
+	                &time_now);
 	if (r < 0)
 		goto abort;
-	r = crawl_inode(src_parent_ino, COMMIT_COPY, callback_set_cmtime, &time_now);
+	r = crawl_inode(src_parent_ino, COMMIT_ATOMIC, callback_set_cmtime,
+	                &time_now);
 	if (r < 0)
 		goto abort;
 
@@ -3312,14 +3363,14 @@ static void fuse_rename(fuse_req_t req,
 	{
 		int nlinks_delta = -1;
 
-		r = crawl_inode(src_parent_ino, COMMIT_COPY,
+		r = crawl_inode(src_parent_ino, COMMIT_ATOMIC,
 		                callback_change_nlinks, &nlinks_delta);
 		if (r < 0)
 			goto abort;
 		if (!dst_existed)
 		{
 			nlinks_delta = 1;
-			r = crawl_inode(dst_parent_ino, COMMIT_COPY,
+			r = crawl_inode(dst_parent_ino, COMMIT_ATOMIC,
 			                callback_change_nlinks, &nlinks_delta);
 			if (r < 0)
 				goto abort;
@@ -3328,7 +3379,7 @@ static void fuse_rename(fuse_req_t req,
 		// Update the child ino's ctime because rename can change its
 		// ".." dirent's ino field. We would make this field update here,
 		// but the ".." dirent is computed on the fly and not stored on disk.
-		r = crawl_inode(child_ino, COMMIT_COPY,
+		r = crawl_inode(child_ino, COMMIT_ATOMIC,
 		                callback_set_ctime, &time_now);
 		if (r < 0)
 			goto abort;
@@ -3344,6 +3395,11 @@ static void fuse_rename(fuse_req_t req,
 	bpfs_commit();
 	xcall(fuse_reply_err(req, FUSE_ERR_SUCCESS));
 	return;
+
+  abort_parent_ino:
+#if SCSP_ENABLED
+	bpfs_txn_revert();
+#endif
 
   abort:
 	bpfs_abort();
