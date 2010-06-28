@@ -1741,9 +1741,9 @@ static int callback_discover_inodes(uint64_t blockoff, char *block,
                                     uint64_t *blockno)
 {
 	const struct mount_ino *mi = (const struct mount_ino*) mi_void;
-	unsigned start = off;
+	unsigned end = off + size;
 
-	while (off + BPFS_DIRENT_MIN_LEN <= start + size)
+	while (off + BPFS_DIRENT_MIN_LEN <= end)
 	{
 		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
 		if (!dirent->rec_len)
@@ -2062,8 +2062,8 @@ static int callback_find_dirent(uint64_t blockoff, char *block,
                                 void *sd_void, uint64_t *blockno)
 {
 	struct str_dirent *sd = (struct str_dirent*) sd_void;
-	unsigned start = off;
-	while (off + BPFS_DIRENT_MIN_LEN <= start + size)
+	unsigned end = off + size;
+	while (off + BPFS_DIRENT_MIN_LEN <= end)
 	{
 		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
 		if (!dirent->rec_len)
@@ -2078,7 +2078,7 @@ static int callback_find_dirent(uint64_t blockoff, char *block,
 		    && !memcmp(sd->str.str, dirent->name, sd->str.len))
 		{
 			sd->dirent_off = blockoff * BPFS_BLOCK_SIZE
-			                         + off - dirent->rec_len;
+			                 + off - dirent->rec_len;
 			sd->dirent = dirent;
 			return 1;
 		}
@@ -2134,10 +2134,10 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 {
 	struct str_dirent *sd = (struct str_dirent*) sd_void;
 	struct bpfs_dirent *dirent;
-	unsigned start = off;
-	uint64_t min_hole_size = BPFS_DIRENT_LEN(sd->str.len);
+	const unsigned end = off + size;
+	const uint64_t min_hole_size = BPFS_DIRENT_LEN(sd->str.len);
 
-	while (off + min_hole_size <= start + size)
+	while (off + min_hole_size <= end)
 	{
 		assert(!(off % BPFS_DIRENT_ALIGN));
 		dirent = (struct bpfs_dirent*) (block + off);
@@ -2233,10 +2233,11 @@ static int callback_set_dirent_ino(uint64_t blockoff, char *block,
                                    uint64_t crawl_start, enum commit commit,
                                    void *ino_void, uint64_t *blockno)
 {
-	uint64_t *ino = (uint64_t*) ino_void;
+	uint64_t ino = *(uint64_t*) ino_void;
 	struct bpfs_dirent *dirent;
 
 	assert(commit != COMMIT_NONE);
+	assert(!(off % BPFS_DIRENT_ALIGN));
 
 	if (commit == COMMIT_COPY)
 	{
@@ -2248,7 +2249,7 @@ static int callback_set_dirent_ino(uint64_t blockoff, char *block,
 	}
 	dirent = (struct bpfs_dirent*) (block + off);
 
-	dirent->ino = *ino;
+	dirent->ino = ino;
 
 	return 0;
 }
@@ -2262,6 +2263,7 @@ static int callback_clear_dirent_ino(uint64_t blockoff, char *block,
 	struct bpfs_dirent *dirent;
 
 	assert(commit != COMMIT_NONE);
+	assert(!(off % BPFS_DIRENT_ALIGN));
 
 	if (commit == COMMIT_COPY)
 	{
@@ -3114,8 +3116,8 @@ static int callback_empty_dir(uint64_t blockoff, char *block,
                               void *ppi, uint64_t *blockno)
 {
 	uint64_t parent_ino = *(fuse_ino_t*) ppi;
-	unsigned start = off;
-	while (off + BPFS_DIRENT_MIN_LEN <= start + size)
+	unsigned end = off + size;
+	while (off + BPFS_DIRENT_MIN_LEN <= end)
 	{
 		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
 		if (!dirent->rec_len)
@@ -3454,8 +3456,8 @@ static int callback_readdir(uint64_t blockoff, char *block,
                             void *p_void, uint64_t *blockno)
 {
 	struct readdir_params *params = (struct readdir_params*) p_void;
-	const unsigned start = off;
-	while (off + BPFS_DIRENT_MIN_LEN <= start + size)
+	const unsigned end = off + size;
+	while (off + BPFS_DIRENT_MIN_LEN <= end)
 	{
 		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
 		off_t oldsize = params->total_size;
