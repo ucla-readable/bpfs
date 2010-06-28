@@ -3334,6 +3334,9 @@ static void fuse_rename(fuse_req_t req,
 	// TODO: optimize changing these two directory entries in SCSP mode
 	// by only CoWing to the dirent's nearest common parent.
 	// Doing this will probably require implementing crawl_inode_2().
+	// TODO: a part-way optimization would be to only CoW to the root
+	// once, instead of the twice the below does. This can be done by
+	// not CoWing CoWed blocks, as SP mode does.
 #if SCSP_ENABLED
 	bpfs_txn_start();
 #endif
