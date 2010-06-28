@@ -2454,8 +2454,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 
 			static_assert(BPFS_INO_INVALID == 0);
 			memset(ndirent, 0, BPFS_BLOCK_SIZE);
-			ndirent->ino = BPFS_INO_INVALID;
-			ndirent->rec_len = BPFS_BLOCK_SIZE;
+			ndirent->rec_len = 0;
 		}
 		else if (S_ISLNK(mode))
 		{
