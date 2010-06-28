@@ -10,12 +10,14 @@
 
 // if cond is false, display message and then exit
 #define xassert(cond) \
-	if (!(cond)) \
-	{ \
-		fprintf(stderr, "Not true, but should be: %s\n", # cond); \
-		assert(0); \
-		exit(1); \
-	}
+	do { \
+		if (!(cond))  \
+		{ \
+			fprintf(stderr, "Not true, but should be: %s\n", # cond); \
+			assert(0); \
+			exit(1); \
+		} \
+	} while (0)
 
 // if syscall exp call fails, display message and errno and then exit
 #define xsyscall(call, format...) \
