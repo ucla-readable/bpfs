@@ -1729,13 +1729,18 @@ static void discover_tree_allocations(struct bpfs_tree_root *root)
 
 static void discover_inode_allocations(uint64_t ino, bool mounting);
 
+struct mount_ino {
+	bool mounting;
+	uint64_t ino;
+};
+
 static int callback_discover_inodes(uint64_t blockoff, char *block,
                                     unsigned off, unsigned size,
                                     unsigned valid, uint64_t crawl_start,
-                                    enum commit commit, void *mounting_void,
+                                    enum commit commit, void *mi_void,
                                     uint64_t *blockno)
 {
-	bool mounting = *(bool*) mounting_void;
+	const struct mount_ino *mi = (const struct mount_ino*) mi_void;
 	unsigned start = off;
 
 	while (off + BPFS_DIRENT_MIN_LEN <= start + size)
@@ -1749,7 +1754,14 @@ static int callback_discover_inodes(uint64_t blockoff, char *block,
 		off += dirent->rec_len;
 
 		if (dirent->ino != BPFS_INO_INVALID)
-			discover_inode_allocations(dirent->ino, mounting);
+		{
+			discover_inode_allocations(dirent->ino, mi->mounting);
+
+			// Account for child's ".." dirent (not stored on disk):
+			if (mi->mounting && !bpfs_super->ephemeral_valid
+			    && dirent->file_type == BPFS_TYPE_DIR)
+				get_inode(mi->ino)->nlinks++;
+		}
 	}
 	return 0;
 }
@@ -1757,6 +1769,7 @@ static int callback_discover_inodes(uint64_t blockoff, char *block,
 static void discover_inode_allocations(uint64_t ino, bool mounting)
 {
 	struct bpfs_inode *inode = get_inode(ino);
+	struct mount_ino mi = {.mounting = mounting, .ino = ino};
 
 	set_inode(ino);
 	if (mounting && !bpfs_super->ephemeral_valid)
@@ -1764,8 +1777,8 @@ static void discover_inode_allocations(uint64_t ino, bool mounting)
 		inode->nlinks++;
 		if (BPFS_S_ISDIR(inode->mode))
 		{
-			// for inode's "." and ".." dirents (not stored on disk):
-			inode->nlinks += 2;
+			// Account for inode's "." dirent (not stored on disk):
+			inode->nlinks++;
 		}
 	}
 
@@ -1773,7 +1786,7 @@ static void discover_inode_allocations(uint64_t ino, bool mounting)
 	discover_tree_allocations(&inode->root);
 	if (BPFS_S_ISDIR(inode->mode))
 		xcall(crawl_data(ino, 0, BPFS_EOF, COMMIT_NONE,
-		                 callback_discover_inodes, &mounting));
+		                 callback_discover_inodes, &mi));
 }
 
 static int callback_reset_inodes_nlinks(uint64_t blockoff, char *block,
