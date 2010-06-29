@@ -3151,17 +3151,45 @@ static int callback_change_nlinks(char *block, unsigned off,
 	return 0;
 }
 
-static int do_unlink(uint64_t parent_ino, uint64_t dirent_off, uint64_t child_ino)
+static int do_unlink_inode(uint64_t ino, struct bpfs_time time_now)
 {
-	struct bpfs_time time_now = BPFS_TIME_NOW();
-	struct callback_addrem_dirent_data cadd;
+	struct bpfs_inode *inode = get_inode(ino);
 	int nlinks_delta = -1;
-	struct bpfs_inode *child;
 	int r;
 
-	child = get_inode(child_ino);
-	assert(child);
-	cadd = (struct callback_addrem_dirent_data) {false, dirent_off, BPFS_INO_INVALID, BPFS_S_ISDIR(child->mode)};
+	assert(inode);
+	assert(inode->nlinks);
+	if (inode->nlinks == 1 || BPFS_S_ISDIR(inode->mode))
+	{
+		assert(!BPFS_S_ISDIR(inode->mode) || inode->nlinks == 2);
+		// This was the last dirent for this inode. Free the inode:
+		truncate_block_free(&inode->root, 0);
+		free_inode(ino);
+	}
+	else
+	{
+		r = crawl_inode(ino, COMMIT_ATOMIC, callback_change_nlinks,
+		                &nlinks_delta);
+		if (r < 0)
+			return r;
+
+		r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_ctime, &time_now);
+		if (r < 0)
+			return r;
+	}
+
+	return 0;
+}
+
+static int do_unlink(uint64_t parent_ino, uint64_t dirent_off,
+                     uint64_t child_ino)
+{
+	struct bpfs_time time_now = BPFS_TIME_NOW();
+	struct callback_addrem_dirent_data cadd =
+		{false, dirent_off, BPFS_INO_INVALID,
+		 BPFS_S_ISDIR(get_inode(child_ino)->mode)};
+	int r;
+
 	r = crawl_inode(parent_ino, COMMIT_ATOMIC, callback_addrem_dirent, &cadd);
 	if (r < 0)
 		return r;
@@ -3170,30 +3198,7 @@ static int do_unlink(uint64_t parent_ino, uint64_t dirent_off, uint64_t child_in
 	if (r < 0)
 		return r;
 
-	child = get_inode(child_ino);
-	assert(child);
-	assert(child->nlinks);
-	if (child->nlinks == 1 || BPFS_S_ISDIR(child->mode))
-	{
-		assert(!BPFS_S_ISDIR(child->mode) || child->nlinks == 2);
-		// This was the last dirent for this inode. Free the inode:
-		truncate_block_free(&child->root, 0);
-		free_inode(child_ino);
-	}
-	else
-	{
-		r = crawl_inode(child_ino, COMMIT_ATOMIC, callback_change_nlinks,
-		                &nlinks_delta);
-		if (r < 0)
-			return r;
-
-		r = crawl_inode(child_ino, COMMIT_ATOMIC, callback_set_ctime,
-		                &time_now);
-		if (r < 0)
-			return r;
-	}
-
-	return 0;
+	return do_unlink_inode(child_ino, time_now);
 }
 
 static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
@@ -3435,7 +3440,6 @@ static void fuse_rename(fuse_req_t req,
 	bpfs_txn_commit();
 #endif
 
-	// FIXME: should we also update ctime for dst_ino and src_ino? ext4 does.
 	r = crawl_inode(dst_parent_ino, COMMIT_ATOMIC, callback_set_cmtime,
 	                &time_now);
 	if (r < 0)
@@ -3473,9 +3477,9 @@ static void fuse_rename(fuse_req_t req,
 
 	if (unlinked_ino != BPFS_INO_INVALID)
 	{
-		// like do_unlink(), but parent [cm]time and dirent already updated:
-		truncate_block_free(&get_inode(unlinked_ino)->root, 0);
-		free_inode(unlinked_ino);
+		r = do_unlink_inode(unlinked_ino, time_now);
+		if (r < 0)
+			goto abort;
 	}
 
 	bpfs_commit();
