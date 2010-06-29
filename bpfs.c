@@ -2207,7 +2207,7 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 	// TODO: set file_type here
 	if (!dirent->rec_len)
 	{
-		if (off + min_hole_size < BPFS_BLOCK_SIZE)
+		if (off + min_hole_size + BPFS_DIRENT_MIN_LEN <= BPFS_BLOCK_SIZE)
 		{
 			struct bpfs_dirent *next_dirent = (struct bpfs_dirent*) (block + off + min_hole_size);
 			next_dirent->rec_len = 0;
@@ -2238,7 +2238,7 @@ static int callback_dirent_append(uint64_t blockoff, char *block,
 	sd->dirent_off = blockoff * BPFS_BLOCK_SIZE;
 	sd->dirent = (struct bpfs_dirent*) block;
 
-	if (hole_size < BPFS_BLOCK_SIZE)
+	if (hole_size + BPFS_DIRENT_MIN_LEN <= BPFS_BLOCK_SIZE)
 	{
 		struct bpfs_dirent *next_dirent = (struct bpfs_dirent*) (block + hole_size);
 		next_dirent->rec_len = 0;
