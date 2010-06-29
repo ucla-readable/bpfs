@@ -430,6 +430,17 @@ static void bitmap_set(struct bitmap *bitmap, uint64_t no)
 	bitmap->nfree--;
 }
 
+static bool bitmap_ensure_set(struct bitmap *bitmap, uint64_t no)
+{
+	char *word = bitmap->bitmap + no / 8;
+	bool was_set;
+	assert(no < bitmap->ntotal);
+	was_set = *word & (1 << (no % 8));
+	*word |= (1 << (no % 8));
+	bitmap->nfree--;
+	return was_set;
+}
+
 static void bitmap_clear(struct bitmap *bitmap, uint64_t no)
 {
 	char *word = bitmap->bitmap + no / 8;
@@ -801,11 +812,11 @@ static uint64_t alloc_inode(void)
 	return no + 1;
 }
 
-static void set_inode(uint64_t ino)
+static bool set_inode(uint64_t ino)
 {
 	assert(ino != BPFS_INO_INVALID);
 	static_assert(BPFS_INO_INVALID == 0);
-	bitmap_set(&inode_alloc.bitmap, ino - 1);
+	return bitmap_ensure_set(&inode_alloc.bitmap, ino - 1);
 }
 
 static void free_inode(uint64_t ino)
@@ -1770,23 +1781,39 @@ static void discover_inode_allocations(uint64_t ino, bool mounting)
 {
 	struct bpfs_inode *inode = get_inode(ino);
 	struct mount_ino mi = {.mounting = mounting, .ino = ino};
+	bool is_dir = BPFS_S_ISDIR(inode->mode);
+	bool was_set;
 
-	set_inode(ino);
+	was_set = set_inode(ino);
+	xassert(!is_dir || !was_set); // a dir has only one non-".." dirent
+
 	if (mounting && !bpfs_super->ephemeral_valid)
 	{
 		inode->nlinks++;
-		if (BPFS_S_ISDIR(inode->mode))
+		xassert(inode->nlinks);
+		if (is_dir)
 		{
 			// Account for inode's "." dirent (not stored on disk):
 			inode->nlinks++;
+			xassert(inode->nlinks);
 		}
 	}
+	else
+	{
+		if (is_dir)
+			xassert(inode->nlinks >= 2);
+		else
+			xassert(inode->nlinks >= 1);
+	}
 
-	// TODO: combine the inode and block discovery loops?
-	discover_tree_allocations(&inode->root);
-	if (BPFS_S_ISDIR(inode->mode))
-		xcall(crawl_data(ino, 0, BPFS_EOF, COMMIT_NONE,
-		                 callback_discover_inodes, &mi));
+	if (!was_set)
+	{
+		// TODO: combine the inode and block discovery loops?
+		discover_tree_allocations(&inode->root);
+		if (is_dir)
+			xcall(crawl_data(ino, 0, BPFS_EOF, COMMIT_NONE,
+			                 callback_discover_inodes, &mi));
+	}
 }
 
 static int callback_reset_inodes_nlinks(uint64_t blockoff, char *block,
@@ -3051,30 +3078,96 @@ static void fuse_mkdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name,
 	xcall(fuse_reply_entry(req, &e));
 }
 
+static int callback_set_ctime(char *block, unsigned off,
+                              struct bpfs_inode *inode, enum commit commit,
+                              void *new_time_void, uint64_t *blockno)
+{
+	struct bpfs_time *new_time = (struct bpfs_time*) new_time_void;
+	uint64_t new_blockno = *blockno;
+
+	assert(commit != COMMIT_NONE);
+
+	if (commit == COMMIT_COPY)
+	{
+		new_blockno = cow_block_entire(new_blockno);
+		if (new_blockno == BPFS_BLOCKNO_INVALID)
+			return -ENOSPC;
+		block = get_block(new_blockno);
+	}
+	inode = (struct bpfs_inode*) (block + off);
+
+	inode->ctime = *new_time;
+
+	*blockno = new_blockno;
+	return 0;
+}
+
+static int callback_change_nlinks(char *block, unsigned off,
+                                  struct bpfs_inode *inode, enum commit commit,
+                                  void *delta_void, uint64_t *blockno)
+{
+	int nlinks_delta = *(int*) delta_void;
+	uint64_t new_blockno = *blockno;
+
+	assert(commit != COMMIT_NONE);
+
+	if (commit == COMMIT_COPY)
+	{
+		new_blockno = cow_block_entire(new_blockno);
+		if (new_blockno == BPFS_BLOCKNO_INVALID)
+			return -ENOSPC;
+		block = get_block(new_blockno);
+	}
+	inode = (struct bpfs_inode*) (block + off);
+
+	assert(nlinks_delta >= 0 || inode->nlinks >= -nlinks_delta);
+	inode->nlinks += nlinks_delta;
+
+	*blockno = new_blockno;
+	return 0;
+}
+
 static int do_unlink(uint64_t parent_ino, uint64_t dirent_off, uint64_t child_ino)
 {
 	struct bpfs_time time_now = BPFS_TIME_NOW();
 	struct callback_addrem_dirent_data cadd;
+	int nlinks_delta = -1;
 	struct bpfs_inode *child;
 	int r;
 
 	child = get_inode(child_ino);
 	assert(child);
 	cadd = (struct callback_addrem_dirent_data) {false, dirent_off, BPFS_INO_INVALID, BPFS_S_ISDIR(child->mode)};
-	r = crawl_inode(parent_ino, COMMIT_ATOMIC,
-	                callback_addrem_dirent, &cadd);
+	r = crawl_inode(parent_ino, COMMIT_ATOMIC, callback_addrem_dirent, &cadd);
 	if (r < 0)
 		return r;
 
-	r = crawl_inode(parent_ino, COMMIT_ATOMIC,
-	                callback_set_cmtime, &time_now);
+	r = crawl_inode(parent_ino, COMMIT_ATOMIC, callback_set_cmtime, &time_now);
 	if (r < 0)
 		return r;
 
 	child = get_inode(child_ino);
 	assert(child);
-	truncate_block_free(&child->root, 0);
-	free_inode(child_ino);
+	assert(child->nlinks);
+	if (child->nlinks == 1 || BPFS_S_ISDIR(child->mode))
+	{
+		assert(!BPFS_S_ISDIR(child->mode) || child->nlinks == 2);
+		// This was the last dirent for this inode. Free the inode:
+		truncate_block_free(&child->root, 0);
+		free_inode(child_ino);
+	}
+	else
+	{
+		r = crawl_inode(child_ino, COMMIT_ATOMIC, callback_change_nlinks,
+		                &nlinks_delta);
+		if (r < 0)
+			return r;
+
+		r = crawl_inode(child_ino, COMMIT_ATOMIC, callback_set_ctime,
+		                &time_now);
+		if (r < 0)
+			return r;
+	}
 
 	return 0;
 }
@@ -3194,55 +3287,6 @@ static void fuse_symlink(fuse_req_t req, const char *link,
 	fill_fuse_entry(dirent, &e);
 	bpfs_commit();
 	xcall(fuse_reply_entry(req, &e));
-}
-
-static int callback_set_ctime(char *block, unsigned off,
-                              struct bpfs_inode *inode, enum commit commit,
-                              void *new_time_void, uint64_t *blockno)
-{
-	struct bpfs_time *new_time = (struct bpfs_time*) new_time_void;
-	uint64_t new_blockno = *blockno;
-
-	assert(commit != COMMIT_NONE);
-
-	if (commit == COMMIT_COPY)
-	{
-		new_blockno = cow_block_entire(new_blockno);
-		if (new_blockno == BPFS_BLOCKNO_INVALID)
-			return -ENOSPC;
-		block = get_block(new_blockno);
-	}
-	inode = (struct bpfs_inode*) (block + off);
-
-	inode->ctime = *new_time;
-
-	*blockno = new_blockno;
-	return 0;
-}
-
-static int callback_change_nlinks(char *block, unsigned off,
-                                  struct bpfs_inode *inode, enum commit commit,
-                                  void *delta_void, uint64_t *blockno)
-{
-	int nlinks_delta = *(int*) delta_void;
-	uint64_t new_blockno = *blockno;
-
-	assert(commit != COMMIT_NONE);
-
-	if (commit == COMMIT_COPY)
-	{
-		new_blockno = cow_block_entire(new_blockno);
-		if (new_blockno == BPFS_BLOCKNO_INVALID)
-			return -ENOSPC;
-		block = get_block(new_blockno);
-	}
-	inode = (struct bpfs_inode*) (block + off);
-
-	assert(nlinks_delta >= 0 || inode->nlinks >= -nlinks_delta);
-	inode->nlinks += nlinks_delta;
-
-	*blockno = new_blockno;
-	return 0;
 }
 
 #if SCSP_ENABLED
@@ -3423,16 +3467,82 @@ static void fuse_rename(fuse_req_t req,
 	xcall(fuse_reply_err(req, -r));
 }
 
-#if 0
-static void fuse_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t parent_ino,
-                      const char *name)
+static void fuse_link(fuse_req_t req, fuse_ino_t fuse_ino,
+                      fuse_ino_t parent_ino, const char *name)
 {
+	uint64_t ino = fuse_ino; // fuse_ino_t may be a uint32_t and we use &ino
+	size_t name_len = strlen(name) + 1;
+	struct str_dirent sd = {{name, name_len}, BPFS_EOF, NULL};
+	int nlinks_delta = 1;
+	struct bpfs_time time_now = BPFS_TIME_NOW();
+	struct fuse_entry_param e;
+	int r;
+
 	Dprintf("%s(ino = %lu, parent_ino = %lu, name = '%s')\n",
-	        __FUNCTION__, ino, parent_ino, name);
+	        __FUNCTION__, fuse_ino, parent_ino, name);
+
+	if (name_len > BPFS_DIRENT_MAX_NAME_LEN)
+	{
+		r = -ENAMETOOLONG;
+		goto abort;
+	}
+
+	assert(get_inode(ino));
+	assert(!BPFS_S_ISDIR(get_inode(ino)->mode));
+	if (!(get_inode(ino)->nlinks + 1))
+	{
+		r = -EMLINK;
+		goto abort;
+	}
+
+	if (!get_inode(parent_ino))
+	{
+		r = -ENOENT;
+		goto abort;
+	}
+	assert(BPFS_S_ISDIR(get_inode(parent_ino)->mode));
+
+	if (!find_dirent(parent_ino, &sd))
+	{
+		r = -EEXIST;
+		goto abort;
+	}
+
+	if ((r = alloc_dirent(parent_ino, &sd)) < 0)
+		goto abort;
+
+	r = crawl_inode(parent_ino, COMMIT_ATOMIC, callback_set_cmtime, &time_now);
+	if (r < 0)
+		goto abort;
+
+	r = crawl_inode(ino, COMMIT_ATOMIC, callback_change_nlinks, &nlinks_delta);
+	if (r < 0)
+		goto abort;
+	r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_ctime, &time_now);
+	if (r < 0)
+		goto abort;
+
+	// dirent's block is freshly allocated or already copied
+	sd.dirent->file_type = f2b_filetype(get_inode(ino)->mode);
+
+	r = crawl_data(parent_ino, sd.dirent_off, 1, COMMIT_ATOMIC,
+	               callback_set_dirent_ino, &ino);
+	if (r < 0)
+		goto abort;
+	sd.dirent = get_dirent(parent_ino, sd.dirent_off);
+	assert(sd.dirent);
+
+	fill_fuse_entry(sd.dirent, &e);
 	bpfs_commit();
+	xcall(fuse_reply_entry(req, &e));
+	return;
+
+  abort:
+	bpfs_abort();
+	xcall(fuse_reply_err(req, -r));
 }
 
-
+#if 0
 static void fuse_opendir(fuse_req_t req, fuse_ino_t ino,
                          struct fuse_file_info *fi)
 {
@@ -3887,7 +3997,7 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 	ADD_FUSE_CALLBACK(rmdir);
 	ADD_FUSE_CALLBACK(symlink);
 	ADD_FUSE_CALLBACK(rename);
-//	ADD_FUSE_CALLBACK(link); // does unlink(file with #links > 1) require CoW?
+	ADD_FUSE_CALLBACK(link);
 
 //	ADD_FUSE_CALLBACK(setxattr);
 //	ADD_FUSE_CALLBACK(getxattr);
