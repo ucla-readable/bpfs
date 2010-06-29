@@ -149,7 +149,7 @@ struct bpfs_dirent
 
 // static_assert() must be used in a function, so declare one solely for this
 // purpose. It returns its own address to avoid an unused function warning.
-static void* __bpfs_structs_static_asserts(void)
+static inline void* __bpfs_structs_static_asserts(void)
 {
 	static_assert(sizeof(struct height_addr) == 8); // need to set atomically
 	static_assert(!(sizeof(struct bpfs_tree_root) % 8));
