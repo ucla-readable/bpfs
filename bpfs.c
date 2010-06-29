@@ -1372,7 +1372,10 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	if (off == BPFS_EOF)
 		off = root->nbytes;
 	if (size == BPFS_EOF)
+	{
+		assert(root->nbytes >= off);
 		size = root->nbytes - off;
+	}
 	end = off + size;
 
 	assert(commit != COMMIT_NONE || end <= root->nbytes);
