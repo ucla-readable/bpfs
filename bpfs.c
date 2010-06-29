@@ -86,7 +86,7 @@
 # define PROT_INUSE_OLD (PROT_READ | PROT_WRITE)
 #endif
 
-// TODO: repharse this as you-see-everything-p?
+// TODO: rephrase this as you-see-everything-p?
 // NOTE: this doesn't describe situations where the top block is already COWed
 //       but child blocks are refed by the original top block.
 enum commit {
