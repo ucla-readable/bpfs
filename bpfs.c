@@ -2815,11 +2815,12 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 		int r;
 
 		if (beginno + 1 == validno)
-			valid = MIN(valid - beginno * child_max_nbytes, child_max_nbytes);
+			child_valid = MIN(valid - beginno * child_max_nbytes,
+			                  child_max_nbytes);
 		else
 		{
 			assert(validno < beginno + 1);
-			valid = 0;
+			child_valid = 0;
 		}
 
 		if (height > 1)
