@@ -2200,7 +2200,14 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 
 	// TODO: set file_type here
 	if (!dirent->rec_len)
+	{
+		if (off + min_hole_size < BPFS_BLOCK_SIZE)
+		{
+			struct bpfs_dirent *next_dirent = (struct bpfs_dirent*) (block + off + min_hole_size);
+			next_dirent->rec_len = 0;
+		}
 		dirent->rec_len = min_hole_size;
+	}
 	dirent->name_len = sd->str.len;
 	memcpy(dirent->name, sd->str.str, sd->str.len);
 	sd->dirent_off = blockoff * BPFS_BLOCK_SIZE + off;
@@ -2214,6 +2221,7 @@ static int callback_dirent_append(uint64_t blockoff, char *block,
                                   void *sd_void, uint64_t *blockno)
 {
 	struct str_dirent *sd = (struct str_dirent*) sd_void;
+	uint64_t hole_size = BPFS_DIRENT_LEN(sd->str.len);
 
 	assert(!off && size == BPFS_BLOCK_SIZE);
 	assert(crawl_start == blockoff * BPFS_BLOCK_SIZE);
@@ -2221,17 +2229,19 @@ static int callback_dirent_append(uint64_t blockoff, char *block,
 	assert(commit != COMMIT_NONE);
 	assert(commit == COMMIT_FREE);
 
-	static_assert(BPFS_INO_INVALID == 0);
-	memset(block, 0, BPFS_BLOCK_SIZE);
-
 	sd->dirent_off = blockoff * BPFS_BLOCK_SIZE;
 	sd->dirent = (struct bpfs_dirent*) block;
 
-	// TODO: set file_type here
-	if (!sd->dirent->rec_len)
-		sd->dirent->rec_len = BPFS_DIRENT_LEN(sd->str.len);
+	if (hole_size < BPFS_BLOCK_SIZE)
+	{
+		struct bpfs_dirent *next_dirent = (struct bpfs_dirent*) (block + hole_size);
+		next_dirent->rec_len = 0;
+	}
+	sd->dirent->rec_len = hole_size;
+
 	sd->dirent->name_len = sd->str.len;
 	memcpy(sd->dirent->name, sd->str.str, sd->str.len);
+	// TODO: set file_type here
 
 	return 0;
 }
@@ -2481,9 +2491,6 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 
 			ndirent = (struct bpfs_dirent*) get_block(inode->root.ha.addr);
 			assert(ndirent);
-
-			static_assert(BPFS_INO_INVALID == 0);
-			memset(ndirent, 0, BPFS_BLOCK_SIZE);
 			ndirent->rec_len = 0;
 		}
 		else if (S_ISLNK(mode))
