@@ -1766,6 +1766,7 @@ static int callback_discover_inodes(uint64_t blockoff, char *block,
 			break;
 		}
 		off += dirent->rec_len;
+		assert(off <= BPFS_BLOCK_SIZE);
 
 		if (dirent->ino != BPFS_INO_INVALID)
 		{
@@ -2102,6 +2103,7 @@ static int callback_find_dirent(uint64_t blockoff, char *block,
 			break;
 		}
 		off += dirent->rec_len;
+		assert(off <= BPFS_BLOCK_SIZE);
 		if (dirent->ino == BPFS_INO_INVALID)
 			continue;
 		if (sd->str.len == dirent->name_len
@@ -2182,6 +2184,7 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 			goto found;
 		}
 		off += dirent->rec_len;
+		assert(off <= BPFS_BLOCK_SIZE);
 	}
 	return 0;
 
@@ -3228,6 +3231,7 @@ static int callback_empty_dir(uint64_t blockoff, char *block,
 			break;
 		}
 		off += dirent->rec_len;
+		assert(off <= BPFS_BLOCK_SIZE);
 		if (dirent->ino == BPFS_INO_INVALID)
 			continue;
 		if (dirent->ino == parent_ino)
@@ -3591,6 +3595,7 @@ static int callback_readdir(uint64_t blockoff, char *block,
 			break;
 		}
 		off += dirent->rec_len;
+		assert(off <= BPFS_BLOCK_SIZE);
 		if (dirent->ino == BPFS_INO_INVALID)
 			continue;
 		assert(dirent->rec_len >= BPFS_DIRENT_LEN(dirent->name_len));
