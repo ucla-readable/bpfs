@@ -45,7 +45,6 @@
 * near term notes
 - convince self that current code is correct.
 - fuse_rename() needs restructuring. probably needs crawl_inode_2().
-- check that nlinks does not overflow (and in general, that nothing overflows)
 - correctness test: snapshot ram before op, during op, and after: during should "match" before or after
 	- want to snapshot during not during a machine instruction?
 	- maybe track which bytes/pages change and only compare them for speed?
@@ -55,7 +54,7 @@
 - implement readdir() that works when called multiple times and contents change
 - 64bit bpfs can create inos larger than 32b fuse can store. probably don't fix, just keep this in mind.
 - fixme: commit_abort() does not abort entire syscall in SCSP
-- do not zero the first directory block when creating a directory? do not allocate the block?
+- do not allocate the first directory block when creating a directory?
 
 * current work
 - implement scsp
