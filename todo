@@ -1,5 +1,3 @@
-- add SCSP to BPFS
-- start writing benchmarks and measurement tools now to evaluate dev of SCSP?
 - could make truncate(expand) write fewer bytes by adding an inode field
 	'valid', where valid <= nbytes
 - introduce offset typedefs: blockno_t, pgno_t, byteno_t, nbytes_t, ?
@@ -35,3 +33,34 @@
 * limits
 - SCSP write() can be atomic, but is it guaranteed? eg failed allocation part
   way through a large write? in general, how does abort work?
+
+* long term notes
+- code seems too complicated. maybe how to commit is tied too closely to other?
+- when SCSP has to COW, would it ever be helpful to wait on committing the change for a later write that would have to re-COW a shared set of blocks?
+	- SP mode would do this
+- can SCSP work with one crawl down and then back up?
+- could make truncate(expand) write fewer bytes by adding an inode field
+	'valid', where valid <= nbytes
+
+* near term notes
+- convince self that current code is correct.
+- fuse_rename() needs restructuring. probably needs crawl_inode_2().
+- check that nlinks does not overflow (and in general, that nothing overflows)
+- correctness test: snapshot ram before op, during op, and after: during should "match" before or after
+	- want to snapshot during not during a machine instruction?
+	- maybe track which bytes/pages change and only compare them for speed?
+	- work with large file systems, too? (or, woozle has 8GB ram)
+	- issue: syscalls are not "atomic". inode file grows in size, freed entries are modified, timestamp updates.
+	- perhaps track in pin
+- implement readdir() that works when called multiple times and contents change
+- 64bit bpfs can create inos larger than 32b fuse can store. probably don't fix, just keep this in mind.
+- fixme: commit_abort() does not abort entire syscall in SCSP
+- do not zero the first directory block when creating a directory? do not allocate the block?
+
+* current work
+- implement scsp
+- add benchmarks and measurement tools
+
+* on the horizon
+- add more code documentation? (function definitions?) and/or clean up.
+- make code fast in time, too, for ucsd?
