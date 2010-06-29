@@ -139,8 +139,9 @@ struct bpfs_dirent
 } __attribute__((packed)); // pack rather than manually pad for char name[]
 
 #define BPFS_DIRENT_ALIGN 8
-// FIXME: make MAX_NAME_LEN the MIN(MAX_NAME_LEN, 1 << (sizeof(name_len) * 8))?
-#define BPFS_DIRENT_MAX_NAME_LEN (BPFS_BLOCK_SIZE - sizeof(struct bpfs_dirent))
+#define BPFS_DIRENT_MAX_NAME_LEN \
+	MIN(BPFS_BLOCK_SIZE - sizeof(struct bpfs_dirent), \
+	    1 << (sizeof(((struct bpfs_dirent*) NULL)->name_len) * 8))
 #define BPFS_DIRENT_LEN(name_len) \
 	ROUNDUP64(sizeof(struct bpfs_dirent) + (name_len), BPFS_DIRENT_ALIGN)
 #define BPFS_DIRENT_MIN_LEN BPFS_DIRENT_LEN(0)
