@@ -1766,7 +1766,7 @@ static int callback_discover_inodes(uint64_t blockoff, char *block,
 			break;
 		}
 		off += dirent->rec_len;
-		assert(off <= BPFS_BLOCK_SIZE);
+		xassert(off <= BPFS_BLOCK_SIZE);
 
 		if (dirent->ino != BPFS_INO_INVALID)
 		{
@@ -1775,7 +1775,10 @@ static int callback_discover_inodes(uint64_t blockoff, char *block,
 			// Account for child's ".." dirent (not stored on disk):
 			if (mi->mounting && !bpfs_super->ephemeral_valid
 			    && dirent->file_type == BPFS_TYPE_DIR)
+			{
 				get_inode(mi->ino)->nlinks++;
+				xassert(get_inode(mi->ino)->nlinks);
+			}
 		}
 	}
 	return 0;
@@ -2342,6 +2345,9 @@ static int callback_addrem_dirent(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
+	if (cadd->dir && cadd->add && !(inode->nlinks + 1))
+		return -EMLINK;
+
 	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(*blockno);
@@ -2357,6 +2363,7 @@ static int callback_addrem_dirent(char *block, unsigned off,
 			inode->nlinks++;
 		else
 			inode->nlinks--;
+		assert(inode->nlinks >= 2);
 	}
 
 	dirent_callback = cadd->add ? callback_set_dirent_ino : callback_clear_dirent_ino;
@@ -3123,6 +3130,9 @@ static int callback_change_nlinks(char *block, unsigned off,
 	uint64_t new_blockno = *blockno;
 
 	assert(commit != COMMIT_NONE);
+
+	if (nlinks_delta > 0 && inode->nlinks > inode->nlinks + nlinks_delta)
+		return -EMLINK;
 
 	if (commit == COMMIT_COPY)
 	{
