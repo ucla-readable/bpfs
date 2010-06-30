@@ -5,11 +5,17 @@
 #define __STDC_FORMAT_MACROS
 
 #include <stdio.h>
+#include <string.h>
 #include <inttypes.h>
 #include "pin.H"
 
-#include <ext/hash_map>
-
+#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 4)
+# include <unordered_map>
+using std::unordered_map;
+#else
+# include <ext/hash_map>
+# define unordered_map __gnu_cxx::hash_map
+#endif
 
 #define BPRAM_INFO "inform_pin_of_bpram"
 
@@ -97,7 +103,7 @@ struct backtrace_hash : public std::unary_function<backtrace,size_t>
 	}
 };
 
-typedef __gnu_cxx::hash_map<backtrace,UINT64,backtrace_hash> backtrace_writes;
+typedef unordered_map<backtrace,UINT64,backtrace_hash> backtrace_writes;
 
 backtrace_writes bt_writes;
 

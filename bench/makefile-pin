@@ -47,6 +47,7 @@ endif
 ifeq ($(TARGET_COMPILER),gnu)
     include $(PIN_HOME)/source/tools/makefile.gnu.config
     CXXFLAGS ?= -Wall -Werror -Wno-unknown-pragmas $(DBG) $(OPT)
+	#CXXFLAGS += -std=c++0x # For GCC 4.4
     PIN=$(PIN_HOME)/pin
 endif
 
