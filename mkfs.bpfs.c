@@ -28,7 +28,7 @@ int main(int argc, char **argv)
 	bpram_name = argv[1];
 
 	bpram_fd = xsyscall(open(bpram_name, O_RDWR));
-	
+
 	xsyscall(fstat(bpram_fd, &stbuf));
 	bpram_size = stbuf.st_size;
 	xassert(bpram_size == stbuf.st_size);

@@ -3641,7 +3641,7 @@ static int callback_readdir(uint64_t blockoff, char *block,
 	return 0;
 }
 
-static int callback_set_atime(char *block, unsigned off, 
+static int callback_set_atime(char *block, unsigned off,
                               struct bpfs_inode *inode, enum commit commit,
                               void *new_time_void, uint64_t *blockno)
 {
