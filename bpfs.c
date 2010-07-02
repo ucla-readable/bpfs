@@ -1482,10 +1482,15 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 		}
 		else if (change_addr || change_size || change_height_holes)
 		{
+			bool overwrite = off < root->nbytes;
 			bool inplace;
+
+			// FYI:
+			assert(!(!change_addr && overwrite && change_size));
+
 			if (*prev_blockno != new_blockno)
 				inplace = true;
-			else if (change_addr && change_size)
+			else if (change_addr && overwrite && change_size)
 			{
 				inplace = commit == COMMIT_FREE;
 			}
