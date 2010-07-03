@@ -1003,33 +1003,27 @@ static int tree_change_height(struct bpfs_tree_root *root,
                               unsigned new_height,
                               enum commit commit, uint64_t *blockno)
 {
-	uint64_t prev_height = root->ha.height;
+	uint64_t height = root->ha.height;
 	uint64_t new_root_addr;
 
 	assert(commit != COMMIT_NONE);
 
-	if (prev_height == new_height)
+	if (height == new_height)
 		return 0;
 
-	if (new_height > prev_height)
+	if (new_height > height)
 	{
-		unsigned height_delta = new_height - prev_height;
 		if (root->nbytes && root->ha.addr != BPFS_BLOCKNO_INVALID)
 		{
+			uint64_t child_max_nbytes = BPFS_BLOCK_SIZE
+			                            * tree_max_nblocks(height);
 			new_root_addr = root->ha.addr;
-			while (height_delta--)
+			for (; height < new_height; height++)
 			{
+				uint64_t max_nbytes = BPFS_BLOCKNOS_PER_INDIR
+				                      * child_max_nbytes;
 				uint64_t new_blockno;
 				struct bpfs_indir_block *new_indir;
-				/*
-				uint64_t prev_valid = MIN(root->nbytes,
-					                      BPFS_BLOCK_SIZE
-				                          * tree_max_nblocks(prev_height));
-				uint64_t new_valid = MIN(root->nbytes,
-					                     BPFS_BLOCK_SIZE
-				                         * tree_max_nblocks(new_height));
-				*/
-				int i;
 
 				if ((new_blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
 					return -ENOSPC;
@@ -1040,13 +1034,17 @@ static int tree_change_height(struct bpfs_tree_root *root,
 				// If the file was larger than the tree we need to mark the
 				//   newly valid block entries as sparse.
 				// This is truncate_block_zero(), but simpler.
-				// For now, just mark all as invalid.
-				// TODO: optimize by writing only the necessary entries
-				//   (prev_valid through new_valid).
-				for (i = 1; i < BPFS_BLOCKNOS_PER_INDIR; i++)
-					new_indir->addr[i] = BPFS_BLOCKNO_INVALID;
+				if (child_max_nbytes < root->nbytes)
+				{
+					uint64_t valid = child_max_nbytes;
+					uint64_t next_valid = MIN(root->nbytes, max_nbytes);
+					int i = 1;
+					for (; valid < next_valid; i++, valid += child_max_nbytes)
+						new_indir->addr[i] = BPFS_BLOCKNO_INVALID;
+				}
 
 				new_root_addr = new_blockno;
+				child_max_nbytes = max_nbytes;
 			}
 		}
 		else
@@ -1054,7 +1052,7 @@ static int tree_change_height(struct bpfs_tree_root *root,
 	}
 	else
 	{
-		unsigned height_delta = prev_height - new_height;
+		unsigned height_delta = height - new_height;
 		new_root_addr = root->ha.addr;
 		while (height_delta-- && new_root_addr != BPFS_BLOCKNO_INVALID)
 		{
