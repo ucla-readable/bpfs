@@ -20,7 +20,7 @@ using std::unordered_map;
 #define BPRAM_INFO "inform_pin_of_bpram"
 
 // Max backtrace depth
-#define NBSTEPS 15
+#define NBSTEPS 20
 
 // Whether to log each write
 #define LOG_WRITES 0
@@ -264,7 +264,10 @@ int main(int argc, char **argv)
 #endif
     PIN_AddFiniFunction(Fini, 0);
 	if (trace)
+	{
 		printf("pin: logging to %s\n", KnobOutputFile.Value().c_str());
+		fflush(stdout);
+	}
 
     PIN_StartProgram(); // does not return
     return 0;

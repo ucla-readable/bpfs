@@ -2539,6 +2539,8 @@ static void fuse_init(void *userdata, struct fuse_conn_info *conn)
 {
 	static_assert(FUSE_ROOT_ID == BPFS_INO_ROOT);
 	Dprintf("%s()\n", __FUNCTION__);
+	printf("BPFS running\n");
+	fflush(stdout);
 	bpfs_commit();
 }
 
