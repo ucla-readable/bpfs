@@ -3,7 +3,7 @@
 #include "util.h"
 #include "hash_map.h"
 
-#define FUSE_USE_VERSION 26
+#define FUSE_USE_VERSION FUSE_MAKE_VERSION(2, 8)
 #include <fuse/fuse_lowlevel.h>
 
 #include <assert.h>
@@ -59,6 +59,7 @@
 #define RFSCK_MAX_INTERVAL 100000
 
 #define FUSE_ERR_SUCCESS 0
+#define FUSE_BIG_WRITES (FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8))
 
 #define BPFS_EOF UINT64_MAX
 
@@ -4160,6 +4161,8 @@ void inform_pin_of_bpram(const char *bpram_addr, size_t size)
 int main(int argc, char **argv)
 {
 	void (*destroy_bpram)(void);
+	int fargc;
+	char **fargv;
 	int r = -1;
 
 	xassert(!hash_map_init());
@@ -4281,8 +4284,36 @@ int main(int argc, char **argv)
 	memmove(argv + 1, argv + 3, (argc - 2) * sizeof(*argv));
 	argc -= 2;
 
+#if FUSE_BIG_WRITES
 	{
-		struct fuse_args fargs = FUSE_ARGS_INIT(argc, argv);
+		const char *argv_str_end = argv[argc - 1] + strlen(argv[argc - 1]) + 1;
+		size_t argv_str_len = argv_str_end - argv[0];
+		const char *bigwrites = "-obig_writes";
+		char *fargv_str;
+		int i;
+
+		fargc = argc + 1;
+		fargv = malloc((fargc + 1) * sizeof(*fargv));
+		xassert(fargv);
+
+		fargv_str = malloc(argv_str_len + strlen(bigwrites) + 1);
+		xassert(fargv_str);
+		memcpy(fargv_str, argv[0], argv_str_len);
+		strcpy(&fargv_str[argv_str_len + 1], bigwrites);
+
+		fargv[0] = fargv_str;
+		for (i = 1; i < argc; i++)
+			fargv[i] = fargv_str + (argv[i] - argv[0]);
+		fargv[fargc - 1] = fargv_str + argv_str_len + 1;
+		fargv[fargc] = 0;
+	}
+#else
+	fargc = argc;
+	fargv = argv;
+#endif
+
+	{
+		struct fuse_args fargs = FUSE_ARGS_INIT(fargc, fargv);
 		struct fuse_lowlevel_ops fuse_ops;
 		struct fuse_session *se;
 		struct fuse_chan *ch;
@@ -4312,6 +4343,12 @@ int main(int argc, char **argv)
 		free(mountpoint);
 		fuse_opt_free_args(&fargs);
 	}
+
+#if FUSE_BIG_WRITES
+	free(fargv[0]);
+	free(fargv);
+#endif
+	fargv = NULL;
 
 	directory_parent_destroy();
 
