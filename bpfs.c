@@ -1179,8 +1179,9 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 	struct bpfs_indir_block *indir;
 	uint64_t child_max_nblocks = max_nblocks / BPFS_BLOCKNOS_PER_INDIR;
 	uint64_t child_max_nbytes = child_max_nblocks * BPFS_BLOCK_SIZE;
-	uint64_t firstno = off / (BPFS_BLOCK_SIZE * child_max_nblocks);
-	uint64_t lastno = (off + size - 1) / (BPFS_BLOCK_SIZE * child_max_nblocks);
+	uint64_t firstno = off / child_max_nbytes;
+	uint64_t lastno = (off + size - 1) / child_max_nbytes;
+	uint64_t validno = (valid + child_max_nbytes - 1) / child_max_nbytes;
 	uint64_t in_hole = false;
 	enum commit child_commit;
 	uint64_t no;
@@ -1201,9 +1202,6 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 
 	if (blockno == BPFS_BLOCKNO_INVALID)
 	{
-		uint64_t validno = (valid + BPFS_BLOCK_SIZE * child_max_nblocks - 1)
-		                   / (BPFS_BLOCK_SIZE * child_max_nblocks);
-
 		if (commit == COMMIT_NONE)
 			return crawl_hole(blockoff, off, size, valid, crawl_start,
 			                  callback, user);
@@ -1233,7 +1231,8 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		else
 		{
 			child_off = 0;
-			child_blockoff = blockoff + (no - firstno) * child_max_nblocks - ((off % child_max_nbytes) / BPFS_BLOCK_SIZE);
+			child_blockoff = blockoff + (no - firstno) * child_max_nblocks
+			                 - ((off % child_max_nbytes) / BPFS_BLOCK_SIZE);
 		}
 		assert(blockoff <= child_blockoff);
 
@@ -1244,9 +1243,9 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		assert(child_size <= size);
 		assert(child_size <= child_max_nbytes);
 
-		if (no * child_max_nbytes < valid)
+		if (no < validno)
 		{
-			if ((no + 1) * child_max_nbytes <= valid)
+			if (no + 1 <= validno)
 				child_valid = child_max_nbytes;
 			else
 				child_valid = valid % child_max_nbytes;
@@ -1279,10 +1278,12 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		{
 			assert(commit != COMMIT_NONE);
 			// TODO: opt: no need to copy if writing to invalid entries
-			if (prev_blockno == blockno && !(COW_OPT && commit == COMMIT_ATOMIC && firstno == lastno))
+			if (prev_blockno == blockno
+			    && !(COW_OPT && (commit == COMMIT_ATOMIC && firstno == lastno)))
 			{
 				// TODO: avoid copying data that will be overwritten?
-				if ((blockno = cow_block_entire(blockno)) == BPFS_BLOCKNO_INVALID)
+				if ((blockno = cow_block_entire(blockno))
+				    == BPFS_BLOCKNO_INVALID)
 					return -ENOSPC;
 				indir = (struct bpfs_indir_block*) get_block(blockno);
 			}
@@ -2469,6 +2470,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	if (!find_dirent(parent_ino, &sd))
 		return -EEXIST;
 
+	// TODO: should we init inodes in alloc and below?
 	ino = alloc_inode();
 	if (ino == BPFS_INO_INVALID)
 		return -ENOSPC;
