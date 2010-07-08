@@ -19,10 +19,12 @@ backtraces = []
 for line in sys.stdin:
 	line = line[:-1]
 	if (not in_backtraces):
-		if (line == "write backtraces start:"):
+		if (line == 'write backtraces start:'):
 			in_backtraces = True
+		if (line.startswith('total number of bytes written: ')):
+			sys.stdout.write('# ' + line + '\n');
 		continue
-	if (in_backtraces and line == "write backtraces end"):
+	if (in_backtraces and line == 'write backtraces end'):
 		in_backtraces = False
 		break
 
