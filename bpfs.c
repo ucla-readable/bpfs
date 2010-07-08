@@ -2915,7 +2915,7 @@ static unsigned count_bits(unsigned x)
 	unsigned n = 0;
 	unsigned i;
 	for (i = 0; i < 8 * sizeof(x); i++)
-		n += !!(x & i);
+		n += !!(x & (1 << i));
 	return n;
 }
 
