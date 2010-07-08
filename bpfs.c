@@ -2931,6 +2931,7 @@ static int callback_setattr(char *block, unsigned off,
 	struct callback_setattr_data *csd = csd_void;
 	struct stat *attr = csd->attr;
 	int to_set = csd->to_set;
+	int nonatomic = FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME;
 	uint64_t new_blockno = *blockno;
 
 	// NOTE: don't need to do all of these atomically?
@@ -2938,7 +2939,7 @@ static int callback_setattr(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE && count_bits(to_set) > 1)
+	if (commit != COMMIT_FREE && count_bits(to_set & ~nonatomic) > 1)
 	{
 		new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
