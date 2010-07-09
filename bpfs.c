@@ -2427,7 +2427,9 @@ static int callback_init_inode(char *block, unsigned off,
 	ha_set(&inode->root.ha, 0, BPFS_BLOCKNO_INVALID);
 	inode->root.nbytes = 0;
 	inode->mtime = inode->ctime = inode->atime = BPFS_TIME_NOW();
-	memset(inode->pad, 0, sizeof(inode->pad));
+	// NOTE: inode->pad is uninitialized.
+	// A format ugprade can zero needed fields before bumping the version.
+	//memset(inode->pad, 0, sizeof(inode->pad));
 
 	*blockno = new_blockno;
 	return 0;
