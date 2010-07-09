@@ -2952,14 +2952,13 @@ static int callback_setattr(char *block, unsigned off,
 		  ;
 	uint64_t new_blockno = *blockno;
 
-	// NOTE: don't need to do all of these atomically?
-	// but do want to preserve syscall atomicity?
-
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE
-	    && count_bits(to_set & ~nonatomic) > 1
-	    && to_set != (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID))
+	if (!(commit == COMMIT_FREE
+	      || (COW_OPT
+	          && commit == COMMIT_ATOMIC
+	          && (count_bits(to_set & ~nonatomic) <= 1
+	              || to_set == (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID)))))
 	{
 		new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
