@@ -2200,7 +2200,9 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
   found:
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY)
+	// "#if !COW_OPT" rather than "if (commit == COMMIT_COPY)" because crawl()
+	// is given a range to write, so "commit" is mostly COPY in this function:
+#if !COW_OPT
 	{
 		uint64_t new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2209,6 +2211,7 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 		dirent = (struct bpfs_dirent*) (block + off);
 		*blockno = new_blockno;
 	}
+#endif
 
 	// TODO: set file_type here
 	if (!dirent->rec_len)
