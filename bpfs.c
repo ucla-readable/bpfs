@@ -939,16 +939,22 @@ static int bpfs_stat(fuse_ino_t ino, struct stat *stbuf)
 	if (!inode)
 		return -ENOENT;
 	memset(stbuf, 0, sizeof(stbuf));
+	/* stbuf->st_dev */
 	stbuf->st_ino = ino;
 	stbuf->st_nlink = inode->nlinks;
 	stbuf->st_mode = b2f_mode(inode->mode);
 	stbuf->st_uid = inode->uid;
 	stbuf->st_gid = inode->gid;
+	/* stbuf->st_rdev */
 	stbuf->st_size = inode->root.nbytes;
+	stbuf->st_blksize = BPFS_BLOCK_SIZE;
 	stbuf->st_blocks = tree_nblocks(&inode->root) * BPFS_BLOCK_SIZE / 512;
 	stbuf->st_atime = inode->atime.sec;
+	/* stbuf->st_atime_nsec */
 	stbuf->st_mtime = inode->mtime.sec;
+	/* stbuf->st_mtime_nsec */
 	stbuf->st_ctime = inode->ctime.sec;
+	/* stbuf->st_ctime_nsec */
 	return 0;
 }
 
@@ -2576,6 +2582,7 @@ static void fuse_statfs(fuse_req_t req, fuse_ino_t ino)
 		xcall(fuse_reply_err(req, EINVAL));
 		return;
 	}
+	memset(&stv, 0, sizeof(stv));
 	stv.f_bsize = BPFS_BLOCK_SIZE;
 	stv.f_frsize = BPFS_BLOCK_SIZE;
 	static_assert(sizeof(stv.f_blocks) >= sizeof(bpfs_super->nblocks));
@@ -2935,7 +2942,14 @@ static int callback_setattr(char *block, unsigned off,
 	struct callback_setattr_data *csd = csd_void;
 	struct stat *attr = csd->attr;
 	int to_set = csd->to_set;
-	int nonatomic = FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME;
+	int nonatomic
+		=   FUSE_SET_ATTR_ATIME
+		  | FUSE_SET_ATTR_MTIME
+#ifdef FUSE_SET_ATTR_ATIME_NOW
+		  | FUSE_SET_ATTR_ATIME_NOW
+		  | FUSE_SET_ATTR_MTIME_NOW
+#endif
+		  ;
 	uint64_t new_blockno = *blockno;
 
 	// NOTE: don't need to do all of these atomically?
@@ -2990,8 +3004,10 @@ static int callback_setattr(char *block, unsigned off,
 			inode->root.nbytes = attr->st_size;
 		}
 	}
+	// NOTE: if add sub-second, check for FUSE_SET_ATTR_ATIME_NOW
 	if (to_set & FUSE_SET_ATTR_ATIME)
 		inode->atime.sec = attr->st_atime;
+	// NOTE: if add sub-second, check for FUSE_SET_ATTR_MTIME_NOW
 	if (to_set & FUSE_SET_ATTR_MTIME)
 		inode->mtime.sec = attr->st_mtime;
 	inode->ctime = BPFS_TIME_NOW();
@@ -3006,7 +3022,18 @@ static int callback_setattr(char *block, unsigned off,
 static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
                          int to_set, struct fuse_file_info *fi)
 {
-	static const int supported = FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID | FUSE_SET_ATTR_SIZE | FUSE_SET_ATTR_ATIME | FUSE_SET_ATTR_MTIME;
+	static const int supported
+		=   FUSE_SET_ATTR_MODE
+		  | FUSE_SET_ATTR_UID
+		  | FUSE_SET_ATTR_GID
+		  | FUSE_SET_ATTR_SIZE
+		  | FUSE_SET_ATTR_ATIME
+		  | FUSE_SET_ATTR_MTIME
+#ifdef FUSE_SET_ATTR_ATIME_NOW
+		  | FUSE_SET_ATTR_ATIME_NOW
+		  | FUSE_SET_ATTR_MTIME_NOW
+#endif
+		  ;
 	struct callback_setattr_data csd = {attr, to_set};
 	struct stat stbuf;
 	int r;
@@ -3022,14 +3049,24 @@ static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 	if (to_set & FUSE_SET_ATTR_SIZE)
 		Dprintf(" size(to %" PRId64 ")", attr->st_size);
 	if (to_set & FUSE_SET_ATTR_ATIME)
+	{
 		Dprintf(" atime");
+#ifdef FUSE_SET_ATTR_ATIME_NOW
+		if (to_set & FUSE_SET_ATTR_ATIME_NOW)
+			Dprintf("[now]");
+#endif
+	}
 	if (to_set & FUSE_SET_ATTR_MTIME)
+	{
 		Dprintf(" mtime");
+#ifdef FUSE_SET_ATTR_MTIME_NOW
+		if (to_set & FUSE_SET_ATTR_MTIME_NOW)
+			Dprintf("[now]");
+#endif
+	}
 	Dprintf(")\n");
 
-	// Why are bits 6, 7, and 8 set?
-	// in fuse 2.8.1, 7 is atime_now and 8 is mtime_now. 6 is skipped.
-	// assert(!(to_set & ~supported));
+	assert(!(to_set & ~supported));
 	to_set &= supported;
 
 	r = crawl_inode(ino, COMMIT_ATOMIC, callback_setattr, &csd);
