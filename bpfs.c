@@ -74,7 +74,7 @@
 // this macro. With hardware support this would also issue an epoch barrier.
 #define epoch_barrier() __asm__ __volatile__("": : :"memory")
 
-#define DEBUG (1 && !defined(NDEBUG))
+#define DEBUG (0 && !defined(NDEBUG))
 #if DEBUG
 # define Dprintf(x...) fprintf(stderr, x)
 #else
