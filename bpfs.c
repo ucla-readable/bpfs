@@ -1276,9 +1276,10 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 			return r;
 		if (child_blockno != child_new_blockno || in_hole)
 		{
+			bool single = firstno == lastno || r == 1;
 			assert(commit != COMMIT_NONE);
 			if (prev_blockno == blockno
-			    && !(COW_OPT && ((commit == COMMIT_ATOMIC && firstno == lastno)
+			    && !(COW_OPT && ((commit == COMMIT_ATOMIC && single)
 			                     || !child_valid)))
 			{
 				// TODO: avoid copying data that will be overwritten?
