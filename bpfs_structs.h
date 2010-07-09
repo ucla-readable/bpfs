@@ -7,7 +7,7 @@
 
 #define BPFS_FS_MAGIC 0xB9F5
 
-#define BPFS_STRUCT_VERSION 6
+#define BPFS_STRUCT_VERSION 7
 
 #define BPFS_BLOCK_SIZE 4096
 
@@ -114,9 +114,9 @@ struct bpfs_time
 struct bpfs_inode
 {
 	uint64_t generation;
-	uint32_t mode;
 	uint32_t uid;
 	uint32_t gid;
+	uint32_t mode;
 	uint32_t nlinks; // valid at mount iff bpfs_super.ephemeral_valid
 	uint64_t flags;
 	struct bpfs_tree_root root;

@@ -2957,7 +2957,9 @@ static int callback_setattr(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit != COMMIT_FREE && count_bits(to_set & ~nonatomic) > 1)
+	if (commit != COMMIT_FREE
+	    && count_bits(to_set & ~nonatomic) > 1
+	    && to_set != (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID))
 	{
 		new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2968,9 +2970,20 @@ static int callback_setattr(char *block, unsigned off,
 
 	if (to_set & FUSE_SET_ATTR_MODE)
 		inode->mode = f2b_mode(attr->st_mode);
-	if (to_set & FUSE_SET_ATTR_UID)
+	if ((to_set & FUSE_SET_ATTR_UID) && (to_set & FUSE_SET_ATTR_GID))
+	{
+		struct bpfs_inode stage = {.uid = attr->st_uid, .gid = attr->st_gid};
+
+		static_assert(!(offsetof(struct bpfs_inode, uid) % 8));
+		static_assert(offsetof(struct bpfs_inode, uid) + sizeof(inode->uid)
+		              == offsetof(struct bpfs_inode, gid));
+		static_assert(sizeof(inode->uid) + sizeof(inode->gid) == 8);
+
+		memcpy(&inode->uid, &stage.uid, sizeof(inode->uid)+sizeof(inode->gid));
+	}
+	else if (to_set & FUSE_SET_ATTR_UID)
 		inode->uid = attr->st_uid;
-	if (to_set & FUSE_SET_ATTR_GID)
+	else if (to_set & FUSE_SET_ATTR_GID)
 		inode->gid = attr->st_gid;
 	if (to_set & FUSE_SET_ATTR_SIZE && attr->st_size != inode->root.nbytes)
 	{
