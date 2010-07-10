@@ -4357,12 +4357,12 @@ int main(int argc, char **argv)
 		fargv_str = malloc(argv_str_len + strlen(bigwrites) + 1);
 		xassert(fargv_str);
 		memcpy(fargv_str, argv[0], argv_str_len);
-		strcpy(&fargv_str[argv_str_len + 1], bigwrites);
+		strcpy(&fargv_str[argv_str_len], bigwrites);
 
 		fargv[0] = fargv_str;
 		for (i = 1; i < argc; i++)
 			fargv[i] = fargv_str + (argv[i] - argv[0]);
-		fargv[fargc - 1] = fargv_str + argv_str_len + 1;
+		fargv[fargc - 1] = fargv_str + argv_str_len;
 		fargv[fargc] = 0;
 	}
 #else
