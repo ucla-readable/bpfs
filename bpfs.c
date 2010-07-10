@@ -1251,7 +1251,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 
 		if (no < validno)
 		{
-			if (no + 1 <= validno)
+			if ((no + 1) * child_max_nbytes <= valid)
 				child_valid = child_max_nbytes;
 			else
 				child_valid = valid % child_max_nbytes;
