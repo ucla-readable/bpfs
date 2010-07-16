@@ -1,0 +1,31 @@
+BPFS - byte-addressable file system
+
+* Requirements
+
+For a correct system:
+- 64-bit Linux (2.6 tested)
+- FUSE >= 2.8
+
+For development:
+- 32/64-bit Linux (2.6 tested)
+- FUSE >= 2.5
+
+* Installation
+
+$ make
+
+* How to Use
+
+BPFS can use a memory-mapped file/device or run in DRAM:
+- File/device:
+  1. (File) Create the file. E.g., dd if=/dev/zero of=bpram.img bs=1M count=$N
+  2. Format the file system: ./mkfs.bpfs bpram.img
+  3. Mount the file system: ./bpfs -f bpram.mnt $MNT
+- DRAM (no need to create a file and contents are lost at exit):
+  1. ./bpfs -s $((N * 1024 * 1024)) $MNT
+
+There are several configuration macros at the top of bpfs.c.
+
+You can also profile BPFS's memory write traffic using the Pintool
+bench/bpramcount.cpp. bench/bpramcount runs BPFS inside of Pin and
+contains setup directions.
