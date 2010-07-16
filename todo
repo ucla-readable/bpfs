@@ -55,6 +55,7 @@
 - 64bit bpfs can create inos larger than 32b fuse can store. probably don't fix, just keep this in mind.
 - fixme: commit_abort() does not abort entire syscall in SCSP
 - do not allocate the first directory block when creating a directory?
+- consider kernel_cache and *_timeout
 
 * current work
 - implement scsp
