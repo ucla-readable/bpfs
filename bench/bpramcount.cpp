@@ -1,3 +1,7 @@
+/* This file is part of BPFS. BPFS is copyright 2009-2010 The Regents of the
+ * University of California. It is distributed under the terms of version 2
+ * of the GNU GPL. See the file LICENSE for details. */
+
 // This file contains an ISA-portable PIN tool for tracing BPFS writes to BPRAM.
 
 // TODO: see source/tools/ManualExamples/proccount.cpp for obtaining fn names

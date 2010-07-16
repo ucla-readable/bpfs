@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 
+# This file is part of BPFS. BPFS is copyright 2009-2010 The Regents of the
+# University of California. It is distributed under the terms of version 2
+# of the GNU GPL. See the file LICENSE for details.
+
 # TODO:
 # - try with different types of file systems
 #   (eg many inodes or dirents or large file)

@@ -1,6 +1,6 @@
-/* This file is part of Featherstitch. Featherstitch is copyright 2005-2010 The
- * Regents of the University of California. It is distributed under the terms of
- * version 2 of the GNU GPL. See the file LICENSE for details. */
+/* This file is part of BPFS. BPFS is copyright 2009-2010 The Regents of the
+ * University of California. It is distributed under the terms of version 2
+ * of the GNU GPL. See the file LICENSE for details. */
 
 #ifndef FSTITCH_LIB_POOL_H
 #define FSTITCH_LIB_POOL_H

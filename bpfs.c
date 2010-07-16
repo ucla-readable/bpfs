@@ -1,3 +1,7 @@
+/* This file is part of BPFS. BPFS is copyright 2009-2010 The Regents of the
+ * University of California. It is distributed under the terms of version 2
+ * of the GNU GPL. See the file LICENSE for details. */
+
 #include "mkbpfs.h"
 #include "bpfs_structs.h"
 #include "util.h"
