@@ -32,14 +32,14 @@ class benchmarks:
             pass
 
     class create:
-        #     dirent + ino                    + cmtime + d.ft + d.ino + valid
-        opt = 4+1+2  + 8+4+4+4+4+8+8+8+3*4+68 + 4+4    + 1    + 8     + 1
+        #     dirent + ino                 + cmtime + d.ft + d.ino + valid
+        opt = 4+1+2  + 8+4+4+4+4+8+8+8+3*4 + 4+4    + 1    + 8     + 1
         def run(self):
             open(os.path.join(self.mnt, 'a'), 'w').close()
 
     class mkdir:
-        #     dirent + ino                    + cmtime + root + nlinks + nbytes + rl + d.ft + nlinks + d.ino + valid
-        opt = 4+1+2  + 8+4+4+4+4+8+8+8+3*4+68 + 4+4    + 8    + 4      + 8      + 2  + 1    + 4      + 8     + 1
+        #     dirent + ino                 + cmtime + root + nlinks + nbytes + rl + d.ft + nlinks + d.ino + valid
+        opt = 4+1+2  + 8+4+4+4+4+8+8+8+3*4 + 4+4    + 8    + 4      + 8      + 2  + 1    + 4      + 8     + 1
         def run(self):
             os.mkdir(os.path.join(self.mnt, 'a'))
 
