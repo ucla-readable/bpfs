@@ -2015,7 +2015,7 @@ static void print_bitmap_differences(const char *name,
 {
 	size_t i;
 	printf("%s bitmap differences (-1):", name);
-	for (i = 0; i < block_alloc.bitmap.ntotal; i++)
+	for (i = 0; i < size; i++)
 	{
 		bool orig = !!(orig_bitmap[i / 8] & (1 << i % 8));
 		bool disc = !!(disc_bitmap[i / 8] & (1 << i % 8));
