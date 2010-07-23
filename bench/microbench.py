@@ -186,8 +186,8 @@ class benchmarks:
             file.close()
 
     class write_1M_8B_4092:
-        #     dCoW        + data + iCoW    + indir + mtime + valid
-        opt = 2*4096-4096 + 4096 + 4096-16 + 2*8+8 + 4     + 1
+        #     dCoW     + data + iCoW  + indir + mtime + valid
+        opt = 2*4096-8 + 8    + 4096  + 2*8+8 + 4     + 1
         # extra: iCoW+16
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
@@ -226,10 +226,9 @@ class benchmarks:
             file.write('0' * 4096)
             file.close()
 
-    # FIXME: fuse breaks up the write at 4kB boundaries
     class write_1M_4k_1:
-        #     CoW data    + data + indir + mtime + valid
-        opt = 2*4096-4096 + 4096 + 4096  + 4     + 1
+        #     CoW data    + data + indir      + mtime + valid
+        opt = 2*4096-4096 + 4096 + 4096+2*8+8 + 4     + 1
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(64):
@@ -237,7 +236,7 @@ class benchmarks:
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
-            file.seek(1) # FIXME: doesn't work?
+            file.seek(1)
             file.write('0' * 4096)
             file.close()
 
