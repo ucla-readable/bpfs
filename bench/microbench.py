@@ -72,7 +72,7 @@ class benchmarks:
     class rename_intra:
         # TODO: could reduce dirent block by 2*8 and by unused
         #     inos + dirents + ino_root + cmtime + rec_len + dirent  + valid
-        opt = 2*8  + 4096    + 8        + 4*4    + 2       + 2+1+2+1 + 1
+        opt = 2*8  + 4096    + 8        + 2*4    + 2       + 2+1+2+1 + 1
         def prepare(self):
             open(os.path.join(self.mnt, 'a'), 'w').close()
         def run(self):
@@ -92,13 +92,15 @@ class benchmarks:
                       os.path.join(self.mnt, 'b', 'c'))
 
     class rename_clobber:
+        # TODO: could reduce dirent blocks by 2*8 and by unused
+        # TODO: could reduce ino_roots by 2*8 and by unused
+        #     inos + dirents + ino_root + cmtime + valid
+        opt = 2*8  + 4096    + 8        + 2*4    + 1
         def prepare(self):
             open(os.path.join(self.mnt, 'a'), 'w').close()
             open(os.path.join(self.mnt, 'b'), 'w').close()
         def run(self):
-            pass
-            # FIXME: Gets stuck during unmount() in communicate():
-            # os.rename(os.path.join(self.mnt, 'a'), os.path.join(self.mnt, 'b'))
+            os.rename(os.path.join(self.mnt, 'a'), os.path.join(self.mnt, 'b'))
 
     class link:
         #     dirent + cmtime + nlinks + ctime + d.ft + d.ino + valid
