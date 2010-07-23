@@ -3536,10 +3536,13 @@ static void fuse_rename(fuse_req_t req,
 	                &time_now);
 	if (r < 0)
 		goto abort;
-	r = crawl_inode(src_parent_ino, COMMIT_ATOMIC, callback_set_cmtime,
-	                &time_now);
-	if (r < 0)
-		goto abort;
+	if (dst_parent_ino != src_parent_ino)
+	{
+		r = crawl_inode(src_parent_ino, COMMIT_ATOMIC, callback_set_cmtime,
+		                &time_now);
+		if (r < 0)
+			goto abort;
+	}
 
 	if (child_file_type == BPFS_TYPE_DIR)
 	{
