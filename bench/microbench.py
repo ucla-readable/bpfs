@@ -70,12 +70,19 @@ class benchmarks:
             os.rmdir(os.path.join(self.mnt, 'a'))
 
     class rename_intra:
+        # TODO: could reduce dirent block by 2*8 and by unused
+        #     inos + dirents + ino_root + cmtime + rec_len + dirent  + valid
+        opt = 2*8  + 4096    + 8        + 4*4    + 2       + 2+1+2+1 + 1
         def prepare(self):
             open(os.path.join(self.mnt, 'a'), 'w').close()
         def run(self):
             os.rename(os.path.join(self.mnt, 'a'), os.path.join(self.mnt, 'b'))
 
     class rename_inter:
+        # TODO: could reduce dirent blocks by 2*8 and by unused
+        # TODO: could reduce ino_roots by 2*8 and by unused
+        #     inos + dirents + ino_roots+ ira + cmtime + rec_len + dirent  + valid
+        opt = 2*8  + 2*4096  + 4096+2*8 + 8   + 4*4    + 2       + 2+1+2+1 + 1
         def prepare(self):
             os.mkdir(os.path.join(self.mnt, 'a'))
             os.mkdir(os.path.join(self.mnt, 'b'))

@@ -1364,9 +1364,10 @@ static int truncate_block_zero(struct bpfs_tree_root *root,
 			                   uint64_t begin, uint64_t end, uint64_t valid,
                                uint64_t *blockno);
 
-static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
-                      enum commit commit, crawl_callback callback, void *user,
-                      uint64_t *prev_blockno)
+static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
+                          uint64_t size, enum commit commit,
+                          crawl_callback callback, void *user,
+                          uint64_t *prev_blockno, bool blockno_refed)
 {
 	uint64_t new_blockno = *prev_blockno;
 	unsigned root_off = block_offset(root);
@@ -1499,12 +1500,14 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 			// FYI:
 			assert(!(!change_addr && overwrite && change_size));
 
-			if (*prev_blockno != new_blockno)
+#if !SCSP_ENABLED
+			assert(blockno_refed || block_freshly_alloced(*prev_blockno));
+#endif
+
+			if (*prev_blockno != new_blockno || !blockno_refed)
 				inplace = true;
 			else if (change_addr && overwrite && change_size)
-			{
 				inplace = commit == COMMIT_FREE;
-			}
 			else
 			{
 				inplace = commit == COMMIT_FREE;
@@ -1537,6 +1540,15 @@ static int crawl_tree(struct bpfs_tree_root *root, uint64_t off, uint64_t size,
 	}
 
 	return r;
+}
+
+static int crawl_tree(struct bpfs_tree_root *root, uint64_t off,
+                      uint64_t size, enum commit commit,
+                      crawl_callback callback, void *user,
+                      uint64_t *prev_blockno)
+{
+	return crawl_tree_ref(root, off, size, commit, callback, user, prev_blockno,
+	                      true);
 }
 
 static int crawl_inodes(uint64_t off, uint64_t size, enum commit commit,
@@ -1616,97 +1628,173 @@ static int crawl_data(uint64_t ino, uint64_t off, uint64_t size,
 	return crawl_inode(ino, commit, callback_crawl_data, &ccdd);
 }
 
-#if 0
-struct callback_crawl_inode_2_data {
-	struct inode_data {
+//
+// Crawl 2: atomically commit two non-contiguous writes
+
+struct callback_crawl_data_2_data {
+	struct ccd2dd {
 		uint64_t ino;
 		uint64_t ino_off;
 		uint64_t off;
 		uint64_t size;
-	} inodes[2];
-	crawl_callback callback;
-	void *user;
+		crawl_callback callback;
+		void *user;
+	} d[2];
 };
 
-static void inode_data_fill(struct inode_data *id,
-                            uint64_t ino, uint64_t off, uint64_t size)
+static void ccd2dd_fill(struct ccd2dd *d,
+                        uint64_t ino, uint64_t off, uint64_t size,
+                        crawl_callback callback, void *user)
 {
-	id->ino = ino;
-	xcall(get_inode_offset(ino, &id->ino_off));
-	id->off = off;
-	id->size = size;
+	d->ino = ino;
+	xcall(get_inode_offset(ino, &d->ino_off));
+	d->off = off;
+	d->size = size;
+	d->callback = callback;
+	d->user = user;
 }
 
-static int callback_crawl_inode_2(uint64_t blockoff, char *block,
-                                  unsigned off, unsigned size, unsigned valid,
-                                  uint64_t crawl_start, enum commit commit,
-                                  void *cci2d_void, uint64_t *blockno)
+static int callback_crawl_data_2_tree(uint64_t blockoff, char *block,
+                                      unsigned off, unsigned size,
+                                      unsigned valid, uint64_t crawl_start,
+                                      enum commit commit, void *ccd2d_void,
+                                      uint64_t *blockno)
 {
-	struct callback_crawl_inode_2_data *cci2d = (struct callback_crawl_inode_2_data*) cci2d_void;
+	struct callback_crawl_data_2_data *ccd2d = (struct callback_crawl_data_2_data*) ccd2d_void;
+	uint64_t prev_blockno = *blockno;
+	uint64_t first_offset = blockoff * BPFS_BLOCK_SIZE + off;
+	uint64_t last_offset = first_offset + size;
+	unsigned mask, i;
+
+	mask = first_offset == ccd2d->d[0].off;
+	mask |= (last_offset == ccd2d->d[1].off + ccd2d->d[1].size) << 1;
+
+	for (i = 1; i <= 2; i++)
+	{
+		if (i & mask)
+		{
+			struct ccd2dd *d = &ccd2d->d[i >> 1];
+			bool new = *blockno != prev_blockno;
+			enum commit c = new ? COMMIT_FREE : COMMIT_COPY;
+			block = get_block(*blockno);
+			int r = d->callback(blockoff, block, d->off % BPFS_BLOCK_SIZE,
+			                    d->size, valid, crawl_start, c,
+			                    d->user, blockno);
+			if (r < 0)
+			{
+				assert(i == 1); // Need cleanup for i==2, but shouldn't happen
+				return r;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int callback_crawl_data_2(uint64_t blockoff, char *block,
+                                 unsigned off, unsigned size, unsigned valid,
+                                 uint64_t crawl_start, enum commit commit,
+                                 void *ccd2d_void, uint64_t *blockno)
+{
+	struct callback_crawl_data_2_data *ccd2d = (struct callback_crawl_data_2_data*) ccd2d_void;
+	struct bpfs_inode *inode = (struct bpfs_inode*) (block + off);
 	uint64_t first_offset = blockoff * BPFS_BLOCK_SIZE + off;
 	uint64_t last_offset = first_offset + size - sizeof(struct bpfs_inode);
-	struct inode_data *id;
-	uint64_t inode_off;
-	struct bpfs_inode *inode;
+	unsigned mask;
 
-	if (first_offset == cci2d->inodes[0].ino_off)
+	mask  = first_offset == ccd2d->d[0].ino_off;
+	mask |= (last_offset == ccd2d->d[1].ino_off) << 1;
+
+	if (mask == 3)
 	{
-		id = &cci2d->inodes[0];
-		inode_off = off;
+		if (ccd2d->d[0].ino == ccd2d->d[1].ino)
+		{
+			assert(ccd2d->d[0].off < ccd2d->d[1].off);
+			return crawl_tree(&inode->root, ccd2d->d[0].off,
+			                  ccd2d->d[1].off + ccd2d->d[1].size, commit,
+			                  callback_crawl_data_2_tree, ccd2d, blockno);
+		}
+		else
+		{
+			uint64_t prev_blockno = *blockno;
+			struct bpfs_inode *inode_1;
+			int r;
+
+			r = crawl_tree(&inode->root, ccd2d->d[0].off, ccd2d->d[0].size,
+			               COMMIT_COPY,
+			               ccd2d->d[0].callback, ccd2d->d[0].user,
+			               blockno);
+			if (r < 0)
+				return r;
+			block = get_block(*blockno);
+			inode_1 =  (struct bpfs_inode*)
+				(block + off + size - sizeof(struct bpfs_inode));
+
+#if SCSP_ENABLED
+			assert(prev_blockno != *blockno); // Required for !blockno_refed
+#endif
+			r = crawl_tree_ref(&inode_1->root, ccd2d->d[1].off,
+			                   ccd2d->d[1].size, COMMIT_COPY,
+			                   ccd2d->d[1].callback, ccd2d->d[1].user,
+			                   blockno, false);
+			assert(r >= 0); // FIXME: recover first crawl_tree() changes
+			return r;
+		}
 	}
-	else if (last_offset == cci2d->inodes[1].ino_off)
+	else if (mask)
 	{
-		id = &cci2d->inodes[1];
-		inode_off = off + size - sizeof(struct bpfs_inode);
+		struct ccd2dd *d = &ccd2d->d[mask >> 1];
+		assert(commit == COMMIT_COPY);
+		return crawl_tree(&inode->root, d->off, d->size, commit,
+		                  d->callback, d->user, blockno);
 	}
-	else
-		return 0;
 
-	inode = (struct bpfs_inode*) (block + inode_off);
-
-	return crawl_tree(&inode->root, id->off, id->size, commit,
-	                  cci2d->callback, cci2d->user, blockno);
+	return 0;
 }
 
-
-static int crawl_inode_2(uint64_t ino_1, uint64_t off_1, uint64_t size_1,
-                         uint64_t ino_2, uint64_t off_2, uint64_t size_2,
-                         enum commit commit,
-                         crawl_callback callback, void *user)
+static bool region_in_one_block(uint64_t off, uint64_t size)
 {
-	struct callback_crawl_inode_2_data cci2d;
-	uint64_t ino_start, ino_end, ino_size;
-	uint64_t new_blockno = bpfs_super->inode_root_addr;
-	struct bpfs_tree_root *root = get_inode_root();
-	int r;
+	return (off % BPFS_BLOCK_SIZE) + size <= BPFS_BLOCK_SIZE;
+}
 
-	if (ino_1 <= ino_2)
+static int crawl_data_2(uint64_t ino_0, uint64_t off_0, uint64_t size_0,
+                        crawl_callback callback_0, void *user_0,
+                        uint64_t ino_1, uint64_t off_1, uint64_t size_1,
+                        crawl_callback callback_1, void *user_1,
+                        enum commit commit)
+{
+	struct callback_crawl_data_2_data ccd2d;
+	uint64_t ino_start, ino_end, ino_size;
+	unsigned idx_0, idx_1;
+
+	// Overlap not allowed
+	assert(!(ino_0 == ino_1
+	         && ((off_0 <= off_1 && off_1 < off_0 + size_0)
+	             || (off_1 <= off_0 && off_0 < off_1 + size_1))));
+	// callback_crawl_data_2_tree() simplification:
+	assert(region_in_one_block(off_0, size_0));
+	assert(region_in_one_block(off_1, size_1));
+
+	if (ino_0 < ino_1 || (ino_0 == ino_1 && off_0 <= off_1))
 	{
-		inode_data_fill(&cci2d.inodes[0], ino_1, off_1, size_1);
-		inode_data_fill(&cci2d.inodes[1], ino_2, off_2, size_2);
+		idx_0 = 0;
+		idx_1 = 1;
 	}
 	else
 	{
-		inode_data_fill(&cci2d.inodes[1], ino_1, off_1, size_1);
-		inode_data_fill(&cci2d.inodes[0], ino_2, off_2, size_2);
+		idx_0 = 1;
+		idx_1 = 0;
 	}
-	cci2d.callback = callback;
-	cci2d.user = user;
+	ccd2dd_fill(&ccd2d.d[idx_0], ino_0, off_0, size_0, callback_0, user_0);
+	ccd2dd_fill(&ccd2d.d[idx_1], ino_1, off_1, size_1, callback_1, user_1);
 
-	ino_start = cci2d.inodes[0].ino_off;
-	ino_end = cci2d.inodes[1].ino_off + sizeof(struct bpfs_inode);
+	ino_start = ccd2d.d[0].ino_off;
+	ino_end = ccd2d.d[1].ino_off + sizeof(struct bpfs_inode);
 	ino_size = ino_end - ino_start;
 
-	r = crawl_tree(root, ino_start, ino_size, commit,
-	               callback_crawl_inode, &cci2d, &new_blockno);
-	if (r >= 0 && bpfs_super->inode_root_addr != new_blockno)
-	{
-		assert(commit == COMMIT_ATOMIC);
-		bpfs_super->inode_root_addr = new_blockno;
-	}
-	return r;
+	return crawl_inodes(ino_start, ino_size, commit,
+	                    callback_crawl_data_2, &ccd2d);
 }
-#endif
 
 
 //
@@ -3387,44 +3475,6 @@ static void fuse_symlink(fuse_req_t req, const char *link,
 	xcall(fuse_reply_entry(req, &e));
 }
 
-#if SCSP_ENABLED
-
-// Infrastructure to atomically commit multiple copy-based crawls in SCSP mode
-
-static struct bpfs_super txn_tmp_super;
-static struct bpfs_super *txn_persistent_super;
-
-static void bpfs_txn_start(void)
-{
-	assert(!txn_persistent_super);
-
-	memcpy(&txn_tmp_super, bpfs_super, sizeof(*bpfs_super));
-	txn_persistent_super = bpfs_super;
-	bpfs_super = &txn_tmp_super;
-}
-
-static void bpfs_txn_commit(void)
-{
-	assert(bpfs_super == &txn_tmp_super && txn_persistent_super);
-
-	txn_persistent_super->inode_root_addr = txn_tmp_super.inode_root_addr;
-	assert(!memcmp(txn_persistent_super, &txn_tmp_super,
-	               sizeof(txn_tmp_super)));
-
-	bpfs_super = txn_persistent_super;
-	txn_persistent_super = NULL;
-}
-
-static void bpfs_txn_revert(void)
-{
-	assert(bpfs_super == &txn_tmp_super && txn_persistent_super);
-
-	bpfs_super = txn_persistent_super;
-	txn_persistent_super = NULL;
-}
-
-#endif
-
 static void fuse_rename(fuse_req_t req,
                         fuse_ino_t src_parent_ino, const char *src_name,
                         fuse_ino_t dst_parent_ino, const char *dst_name)
@@ -3450,7 +3500,6 @@ static void fuse_rename(fuse_req_t req,
 	// Copy src dirent fields since changing it may CoW it
 	child_ino = src_sd.dirent->ino;
 	child_file_type = src_sd.dirent->file_type;
-	src_sd.dirent = NULL; // make it easy to catch accidental uses
 
 	(void) find_dirent(dst_parent_ino, &dst_sd);
 	dst_existed = !!dst_sd.dirent;
@@ -3475,38 +3524,13 @@ static void fuse_rename(fuse_req_t req,
 		dst_sd.dirent->file_type = child_file_type;
 	}
 
-#if 0
-	crawl_inode_2(src_parent_ino, src_dirent_off, src_dirent->rec_len,
-				  dst_parent_ino, dst_dirent_off, dst_dirent->rec_len,
-				  COMMIT_ATOMIC, callback_rename);
-	// or perhaps:
-	crawl_inode_2(src_parent_ino, src_dirent_off, src_dirent->rec_len,
-	              callback_set_dirent_ino, &src_ino,
-	              dst_parent_ino, dst_dirent_off, dst_dirent->rec_len,
-	              callback_set_dirent_ino, &invalid_ino,
-	              COMMIT_ATOMIC);
-#endif
-
-	// TODO: optimize changing these two directory entries in SCSP mode
-	// by only CoWing to the dirent's nearest common parent.
-	// Doing this will probably require implementing crawl_inode_2().
-	// TODO: a part-way optimization would be to only CoW to the root
-	// once, instead of the twice the below does. This can be done by
-	// not CoWing CoWed blocks, as SP mode does.
-#if SCSP_ENABLED
-	bpfs_txn_start();
-#endif
-	r = crawl_data(dst_parent_ino, dst_sd.dirent_off, 1, COMMIT_COPY,
-	               callback_set_dirent_ino, &child_ino);
+	r = crawl_data_2(dst_parent_ino, dst_sd.dirent_off, 1,
+	                 callback_set_dirent_ino, &child_ino,
+	                 src_parent_ino, src_sd.dirent_off, 1,
+	                 callback_set_dirent_ino, &invalid_ino,
+	                 COMMIT_ATOMIC);
 	if (r < 0)
-		goto abort_parent_ino;
-	r = crawl_data(src_parent_ino, src_sd.dirent_off, 1, COMMIT_COPY,
-	               callback_set_dirent_ino, &invalid_ino);
-	if (r < 0)
-		goto abort_parent_ino;
-#if SCSP_ENABLED
-	bpfs_txn_commit();
-#endif
+		goto abort;
 
 	r = crawl_inode(dst_parent_ino, COMMIT_ATOMIC, callback_set_cmtime,
 	                &time_now);
@@ -3553,11 +3577,6 @@ static void fuse_rename(fuse_req_t req,
 	bpfs_commit();
 	xcall(fuse_reply_err(req, FUSE_ERR_SUCCESS));
 	return;
-
-  abort_parent_ino:
-#if SCSP_ENABLED
-	bpfs_txn_revert();
-#endif
 
   abort:
 	bpfs_abort();
