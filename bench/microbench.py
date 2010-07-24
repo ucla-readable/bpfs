@@ -336,7 +336,7 @@ class benchmarks:
 
 
 class filesystem_bpfs:
-    _mount_overhead = 1 # invalid field
+    _mount_overhead = 1 # the valid field
     def __init__(self, megabytes):
         self.img = tempfile.NamedTemporaryFile()
         # NOTE: self.mnt should not be in ~/ so that gvfs does not readdir it
@@ -376,8 +376,6 @@ class filesystem_bpfs:
         raise NameError('BPFS failed to exit correctly')
 
 class filesystem_kernel:
-    # results from empty benchmark:
-    _sync_overhead = {'ext2': 12288, 'ext3': 0, 'ext4': 0, 'btrfs': 49152}
     def __init__(self, fs_name, img):
         self.fs_name = fs_name
         self.img = img
@@ -413,9 +411,8 @@ class filesystem_kernel:
     def unmount(self):
         # Catch all fs activity in write stats:
         subprocess.check_call(['sync'], close_fds=True)
+        # Get write number before unmount to avoid including its activity
         stop_bytes = self._get_dev_writes()
-        if self.fs_name in self._sync_overhead:
-            stop_bytes -= self._sync_overhead[self.fs_name]
         subprocess.check_call(['sudo', 'umount', self.mnt],
                               close_fds=True)
         self.mounted = False
