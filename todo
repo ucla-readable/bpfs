@@ -41,6 +41,7 @@
 - can SCSP work with one crawl down and then back up?
 - could make truncate(expand) write fewer bytes by adding an inode field
 	'valid', where valid <= nbytes
+- could not CoW unused inodes and dirent regions
 
 * near term notes
 - convince self that current code is correct.
@@ -60,6 +61,7 @@
 * current work
 - implement scsp
 - add benchmarks and measurement tools
+	- benchmark ext3/4 with data journaling, too
 
 * on the horizon
 - add more code documentation? (function definitions?) and/or clean up.
