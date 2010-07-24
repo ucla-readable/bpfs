@@ -60,6 +60,28 @@ class benchmarks:
         def run(self):
             os.unlink(os.path.join(self.mnt, 'a'))
 
+    class unlink_1M:
+        #     dirent.ino + cmtime
+        opt = 8          + 8
+        def prepare(self):
+            file = open(os.path.join(self.mnt, 'a'), 'w')
+            for i in range(1 * 64):
+                file.write('0' * (16 * 1024))
+            file.close()
+        def run(self):
+            os.unlink(os.path.join(self.mnt, 'a'))
+
+    class unlink_16M:
+        #     dirent.ino + cmtime
+        opt = 8          + 8
+        def prepare(self):
+            file = open(os.path.join(self.mnt, 'a'), 'w')
+            for i in range(16 * 64):
+                file.write('0' * (16 * 1024))
+            file.close()
+        def run(self):
+            os.unlink(os.path.join(self.mnt, 'a'))
+
     class rmdir:
         #     nlinks + dirent.ino + cmtime
         opt = 4      + 8          + 8
@@ -158,6 +180,18 @@ class benchmarks:
             file.write('0' * 4096)
             file.close()
 
+    # 128kiB is the largest that FUSE will atomically write
+    class append_0B_128k:
+        # TODO: changing height separately from root is needless
+        #     data     + indir   + height + root + size + mtime
+        opt = 128*1024 + 128/4*8 + 8      + 8    + 8    + 4
+        def prepare(self):
+            open(os.path.join(self.mnt, 'a'), 'w').close()
+        def run(self):
+            file = open(os.path.join(self.mnt, 'a'), 'a')
+            file.write('0' * (128 * 1024))
+            file.close()
+
     class append_2M_4k:
         #     data + nr + or + in0 + in1 + size + mtime
         opt = 4096 + 8  + 8  + 8   + 8   + 8    + 4
@@ -169,6 +203,20 @@ class benchmarks:
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'a')
             file.write('0' * 4096)
+            file.close()
+
+    # 128kiB is the largest that FUSE will atomically write
+    class append_2M_128k:
+        #     data     + indir1  + indir0 + root addr/height + size + mtime
+        opt = 128*1024 + 128/4*8 + 2*8    + 8                + 8    + 4
+        def prepare(self):
+            file = open(os.path.join(self.mnt, 'a'), 'w')
+            for i in range(2 * 64):
+                file.write('0' * (16 * 1024))
+            file.close()
+        def run(self):
+            file = open(os.path.join(self.mnt, 'a'), 'a')
+            file.write('0' * (128 * 1024))
             file.close()
 
     class write_1M_8B:
@@ -237,6 +285,37 @@ class benchmarks:
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
             file.seek(1)
             file.write('0' * 4096)
+            file.close()
+
+    # 128kiB is the largest that FUSE will atomically write
+    class write_1M_128k:
+        # TODO: avoid CoWing indir slots that will be overwritten
+        #     data     + indir   + iCoW + root + mtime
+        opt = 128*1024 + 128/4*8 + 4096 + 8    + 4
+        def prepare(self):
+            file = open(os.path.join(self.mnt, 'a'), 'w')
+            for i in range(64):
+                file.write('0' * (16 * 1024))
+            file.close()
+        def run(self):
+            file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
+            file.write('0' * (128 * 1024))
+            file.close()
+
+    # 128kiB is the largest that FUSE will atomically write
+    class write_1M_124k_1:
+        # TODO: avoid CoWing indir slots that will be overwritten
+        #     dCoW   + data     + indir   + iCoW + root + mtime
+        opt = 1+4095 + 124*1024 + 128/4*8 + 4096 + 8    + 4
+        def prepare(self):
+            file = open(os.path.join(self.mnt, 'a'), 'w')
+            for i in range(64):
+                file.write('0' * (16 * 1024))
+            file.close()
+        def run(self):
+            file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
+            file.seek(1)
+            file.write('0' * (124 * 1024))
             file.close()
 
     class read:
@@ -413,7 +492,7 @@ def main():
                 benches.append((name, obj))
 
     if fs_name == 'bpfs':
-        fs = filesystem_bpfs(16)
+        fs = filesystem_bpfs(32)
     else:
         if dev == None:
             raise NameError('Must provide a backing device for ' + fs_name)
