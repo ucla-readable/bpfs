@@ -280,6 +280,7 @@ static void staged_list_free(struct staged_entry **head)
 	}
 }
 
+#ifndef NDEBUG
 static bool staged_list_freshly_alloced(struct staged_entry *head, uint64_t no)
 {
 	struct staged_entry *entry;
@@ -288,6 +289,7 @@ static bool staged_list_freshly_alloced(struct staged_entry *head, uint64_t no)
 			return true;
 	return false;
 }
+#endif
 
 
 struct bitmap {
@@ -1397,13 +1399,17 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 		uint64_t prev_height = root->ha.height;
 		uint64_t requested_height = tree_height(NBLOCKS_FOR_NBYTES(end));
 		uint64_t new_height = MAXU64(prev_height, requested_height);
+#ifndef NDEBUG
 		uint64_t new_max_nblocks = tree_max_nblocks(new_height);
+#endif
 		uint64_t int_valid = MIN(root->nbytes,
 		                         BPFS_BLOCK_SIZE
 		                         * tree_max_nblocks(new_height));
+#ifndef NDEBUG
 		uint64_t new_valid = MIN(MAX(root->nbytes, end),
 		                         BPFS_BLOCK_SIZE
 		                         * tree_max_nblocks(new_height));
+#endif
 
 		// FYI:
 		assert(end <= new_valid);
@@ -1716,7 +1722,9 @@ static int callback_crawl_data_2(uint64_t blockoff, char *block,
 		}
 		else
 		{
+#ifndef NDEBUG
 			uint64_t prev_blockno = *blockno;
+#endif
 			struct bpfs_inode *inode_1;
 			int r;
 
@@ -3497,9 +3505,10 @@ static void fuse_rename(fuse_req_t req,
 	if (r < 0)
 		goto abort;
 
-	// Copy src dirent fields since changing it may CoW it
+	// Copy src dirent fields since changing the src and dst dirents may CoW it
 	child_ino = src_sd.dirent->ino;
 	child_file_type = src_sd.dirent->file_type;
+	src_sd.dirent = NULL;
 
 	(void) find_dirent(dst_parent_ino, &dst_sd);
 	dst_existed = !!dst_sd.dirent;
@@ -3519,7 +3528,7 @@ static void fuse_rename(fuse_req_t req,
 		assert(block_freshly_alloced(bpram_blockno(dst_sd.dirent)));
 #else
 		// TODO: the assignment to dst_sd.dirent assumes that it is not
-		// yet referenced yet. Assert this (how?) or remove this assumption.
+		// yet referenced. Assert this (how?) or remove this assumption.
 #endif
 		dst_sd.dirent->file_type = child_file_type;
 	}
@@ -3564,8 +3573,8 @@ static void fuse_rename(fuse_req_t req,
 		// Update the child ino's ctime because rename can change its
 		// ".." dirent's ino field. We would make this field update here,
 		// but the ".." dirent is computed on the fly and not stored on disk.
-		r = crawl_inode(child_ino, COMMIT_ATOMIC,
-		                callback_set_ctime, &time_now);
+		r = crawl_inode(child_ino, COMMIT_ATOMIC, callback_set_ctime,
+		                &time_now);
 		if (r < 0)
 			goto abort;
 	}
@@ -3838,8 +3847,10 @@ static void fuse_releasedir(fuse_req_t req, fuse_ino_t ino,
 static int sync_inode(uint64_t ino, int datasync)
 {
 	// TODO: flush cache lines and memory controller
+#if 0
 	printf("fsync(ino = %" PRIu64 ", datasync = %d): not yet implemented\n",
 	       ino, datasync);
+#endif
 	return 0;
 }
 
@@ -4035,9 +4046,7 @@ static void fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 	Dprintf("%s(ino = %lu, off = %" PRId64 ", size = %zu)\n",
 	        __FUNCTION__, ino, off, size);
 
-	r = crawl_data(ino, off, size, COMMIT_ATOMIC,
-	               callback_write, buf_unconst);
-
+	r = crawl_data(ino, off, size, COMMIT_ATOMIC, callback_write, buf_unconst);
 	if (r >= 0)
 	{
 		struct bpfs_time time_now = BPFS_TIME_NOW();
