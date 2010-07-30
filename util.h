@@ -44,7 +44,7 @@
 		int err = call; \
 		if (err < 0)	\
 		{ \
-			fprintf(stderr, "%s: %s\n", # call, strerror(err));	\
+			fprintf(stderr, "%s: %s\n", # call, strerror(-err)); \
 			assert(0); \
 			exit(1); \
 		} \
