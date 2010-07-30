@@ -301,10 +301,12 @@ struct bitmap {
 	uint64_t prev_ntotal;
 };
 
+#define BITMAP_SCAN_MAX UINT64_MAX
+
 static int bitmap_init(struct bitmap *bitmap, uint64_t ntotal)
 {
 	size_t size = ntotal / 8;
-	xassert(!(ntotal % (8 * sizeof(char))));
+	xassert(!(ntotal % (sizeof(bitmap_scan_t) * 8)));
 	assert(!bitmap->bitmap);
 	bitmap->bitmap = malloc(size);
 	if (!bitmap->bitmap)
@@ -347,10 +349,10 @@ static int bitmap_resize(struct bitmap *bitmap, uint64_t ntotal)
 	if (bitmap->ntotal > ntotal)
 	{
 		uint64_t i;
-		assert(!(ntotal % (sizeof(uint64_t) * 8)));
-		assert(!(bitmap->ntotal % (sizeof(uint64_t) * 8)));
-		for (i = ntotal; i < bitmap->ntotal; i += sizeof(char) * 8)
-			assert(!((char*) bitmap->bitmap)[i / 8]);
+		assert(!(ntotal % (sizeof(bitmap_scan_t) * 8)));
+		assert(!(bitmap->ntotal % (sizeof(bitmap_scan_t) * 8)));
+		for (i = ntotal; i < bitmap->ntotal; i += sizeof(bitmap_scan_t) * 8)
+			assert(!((bitmap_scan_t*) bitmap->bitmap)[i / 8]);
 	}
 #endif
 
@@ -387,15 +389,15 @@ static int bitmap_resize(struct bitmap *bitmap, uint64_t ntotal)
 static uint64_t bitmap_alloc(struct bitmap *bitmap)
 {
 	uint64_t i;
-	for (i = 0; i < bitmap->ntotal; i += sizeof(unsigned char) * 8)
+	for (i = 0; i < bitmap->ntotal; i += sizeof(bitmap_scan_t) * 8)
 	{
-		unsigned char *word = (unsigned char*) (bitmap->bitmap + i / 8);
-		if (*word != UINT8_MAX)
+		bitmap_scan_t *word = (bitmap_scan_t*) (bitmap->bitmap + i / 8);
+		if (*word != BITMAP_SCAN_MAX)
 		{
 			int j;
 			for (j = 0; j < sizeof(*word) * 8; j++)
 			{
-				if (!(*word & (1 << j)))
+				if (!(*word & (((bitmap_scan_t) 1) << j)))
 				{
 					struct staged_entry *found = malloc(sizeof(*found));
 					if (!found)
@@ -403,7 +405,7 @@ static uint64_t bitmap_alloc(struct bitmap *bitmap)
 					found->index = i + j;
 					found->next = bitmap->allocs;
 					bitmap->allocs = found;
-					*word |= 1 << j;
+					*word |= ((bitmap_scan_t) 1) << j;
 					bitmap->nfree--;
 					return found->index;
 				}

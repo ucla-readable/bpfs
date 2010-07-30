@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <time.h>
 
@@ -76,6 +77,9 @@
 		__a >= __b ? __a : __b; \
 	})
 
+// Max operation that propagates constant expressions as constants
+#define CMAX(_a, _b) ((_a) >= (_b) ? (_a) : (_b))
+
 // 64-bit integer rounding; only works for n = power of two
 // NOTE: ROUNDUP64() may eval n twice. This macro does not create a variable
 // on the stack to avoid this because it prevents gcc from being able
@@ -88,5 +92,7 @@
 
 #define BPFS_TIME_NOW() \
 	({ struct bpfs_time btime = {time(NULL)}; btime; })
+
+typedef uint64_t bitmap_scan_t;
 
 #endif
