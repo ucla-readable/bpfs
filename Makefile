@@ -2,10 +2,12 @@ CC = gcc
 CFLAGS = -Wall -g
 # Remove debug checks:
 #CFLAGS += -DNDEBUG
-# Add optimizations:
-#CFLAGS += -O3 -march=core2
+# Enable optimizations:
+#CFLAGS += -O3 -march=native
+# Enable Nehalem optimizations (GCC 4.4 -march only knows up to Core2):
+#CFLAGS += -msahf -msse4 -msse4.1 -msse4.2
 # Enable gprof:
-#CFLAGS += -pg 
+#CFLAGS += -pg
 
 .PHONY: all clean
 
