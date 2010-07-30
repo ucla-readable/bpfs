@@ -3,7 +3,9 @@ CFLAGS = -Wall -g
 # Remove debug checks:
 #CFLAGS += -DNDEBUG
 # Add optimizations:
-#CFLAGS += -O3
+#CFLAGS += -O3 -march=core2
+# Enable gprof:
+#CFLAGS += -pg 
 
 .PHONY: all clean
 
@@ -40,7 +42,7 @@ hash_map.o: hash_map.c hash_map.h vector.h pool.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 bpfs: bpfs.o mkbpfs.o hash_map.o vector.o
-	$(CC) $(CFLAGS) `pkg-config --libs fuse` -luuid -o $@ $^
+	$(CC) $(CFLAGS) $(LDFLAGS) `pkg-config --libs fuse` -luuid -o $@ $^
 
 mkfs.bpfs: mkfs.bpfs.o mkbpfs.o
-	$(CC) $(CFLAGS) -luuid -o $@ $^
+	$(CC) $(CFLAGS) $(LDFLAGS) -luuid -o $@ $^
