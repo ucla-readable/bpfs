@@ -24,9 +24,10 @@ static char* get_block(char *bpram, struct bpfs_super *super, uint64_t no)
 
 static uint64_t alloc_block(struct bpfs_super *super)
 {
-	static uint64_t next_blockno = 2; /* 0 and 1 are superblocks */
+	static uint64_t next_blockno = BPFS_BLOCKNO_FIRST_ALLOC - 1;
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	assert(next_blockno < super->nblocks);
+	assert(next_blockno < BPFS_MIN_NBLOCKS);
 	return (next_blockno++) + 1;
 }
 
@@ -45,9 +46,6 @@ int mkbpfs(char *bpram, size_t bpram_size)
 		return -ENOSPC;
 
 	super = (struct bpfs_super*) bpram;
-#ifndef NDEBUG
-	super->magic = 0; // set after file system is created. init for valgrind.
-#endif
 	super->version = BPFS_STRUCT_VERSION;
 	static_assert(sizeof(uuid_t) == sizeof(super->uuid));
 	uuid_generate(super->uuid);

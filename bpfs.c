@@ -1760,10 +1760,12 @@ static int callback_crawl_data_2(uint64_t blockoff, char *block,
 	return 0;
 }
 
+#ifndef NDEBUG
 static bool region_in_one_block(uint64_t off, uint64_t size)
 {
 	return (off % BPFS_BLOCK_SIZE) + size <= BPFS_BLOCK_SIZE;
 }
+#endif
 
 static int crawl_data_2(uint64_t ino_0, uint64_t off_0, uint64_t size_0,
                         crawl_callback callback_0, void *user_0,
@@ -3027,7 +3029,7 @@ static unsigned count_bits(unsigned x)
 {
 	unsigned n = 0;
 	unsigned i;
-	for (i = 0; i < 8 * sizeof(x); i++)
+	for (i = 0; i < sizeof(x) * 8; i++)
 		n += !!(x & (1 << i));
 	return n;
 }
