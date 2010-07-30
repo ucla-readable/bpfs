@@ -210,11 +210,6 @@ static hash_map_t * hash_map_create_size_type(size_t n, bool auto_resize, int ty
 	return hm;
 }
 
-hash_map_t * hash_map_create(void)
-{
-	return hash_map_create_size_type(1, 1, PTR);
-}
-
 hash_map_t * hash_map_create_ptr(void)
 {
 	return hash_map_create_size_type(1, 1, PTR);
@@ -223,11 +218,6 @@ hash_map_t * hash_map_create_ptr(void)
 hash_map_t * hash_map_create_str(void)
 {
 	return hash_map_create_size_type(1, 1, STR);
-}
-
-hash_map_t * hash_map_create_size(size_t n, bool auto_resize)
-{
-	return hash_map_create_size_type(1, 1, PTR);
 }
 
 hash_map_t * hash_map_create_size_ptr(size_t n, bool auto_resize)
