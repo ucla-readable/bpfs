@@ -98,10 +98,6 @@ int mkbpfs(char *bpram, size_t bpram_size)
 		inodes_indir->addr[i] = alloc_block(super);
 		inodes = (struct bpfs_inode*) GET_BLOCK(inodes_indir->addr[i]);
 
-		// TODO: why?:
-		static_assert(BPFS_INO_INVALID == 0);
-		memset(inodes, 0, BPFS_BLOCK_SIZE);
-
 #ifndef NDEBUG
 		static_assert(BPFS_BLOCKNO_INVALID == 0);
 		// init the generation field. not required, but appeases valgrind.
