@@ -12,9 +12,11 @@ CFLAGS = -Wall -g
 .PHONY: all clean
 
 BIN = bpfs mkfs.bpfs pwrite
-OBJS = bpfs.o mkfs.bpfs.o mkbpfs.o hash_map.o vector.o
+OBJS = bpfs.o mkfs.bpfs.o mkbpfs.o dcache.o hash_map.o vector.o
 TAGS = tags TAGS
-SRCS = bpfs.c mkfs.bpfs.c mkbpfs.c mkbpfs.h bpfs_structs.h util.h hash_map.c hash_map.h vector.c vector.h pool.h pwrite.c
+SRCS = bpfs.c mkfs.bpfs.c mkbpfs.c mkbpfs.h dcache.c dcache.h \
+       bpfs_structs.h util.h hash_map.c hash_map.h vector.c vector.h \
+       pool.h pwrite.c
 
 all: $(BIN) $(TAGS)
 
@@ -28,7 +30,7 @@ TAGS: $(SRCS)
 	@echo + ctags TAGS
 	@if ctags --version | grep -q Exuberant; then ctags -e $(SRCS); else touch $@; fi
 
-bpfs.o: bpfs.c mkbpfs.h bpfs_structs.h util.h hash_map.h
+bpfs.o: bpfs.c mkbpfs.h bpfs_structs.h dcache.h util.h hash_map.h
 	$(CC) $(CFLAGS) `pkg-config --cflags fuse` -c -o $@ $<
 
 mkfs.bpfs.o: mkfs.bpfs.c mkbpfs.h bpfs_structs.h util.h
@@ -37,13 +39,16 @@ mkfs.bpfs.o: mkfs.bpfs.c mkbpfs.h bpfs_structs.h util.h
 mkbpfs.o: mkbpfs.c mkbpfs.h bpfs_structs.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+dcache.o: dcache.c dcache.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 vector.o: vector.c vector.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 hash_map.o: hash_map.c hash_map.h vector.h pool.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-bpfs: bpfs.o mkbpfs.o hash_map.o vector.o
+bpfs: bpfs.o mkbpfs.o dcache.o hash_map.o vector.o
 	$(CC) $(CFLAGS) $(LDFLAGS) `pkg-config --libs fuse` -luuid -o $@ $^
 
 mkfs.bpfs: mkfs.bpfs.o mkbpfs.o

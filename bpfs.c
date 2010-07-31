@@ -4,6 +4,7 @@
 
 #include "mkbpfs.h"
 #include "bpfs_structs.h"
+#include "dcache.h"
 #include "util.h"
 #include "hash_map.h"
 
@@ -969,6 +970,12 @@ static int bpfs_stat(fuse_ino_t ino, struct stat *stbuf)
 static unsigned block_offset(const void *x)
 {
 	return ((uintptr_t) x) % BPFS_BLOCK_SIZE;
+}
+
+static void mdirent_init_dirent(struct mdirent *md,
+                          const struct bpfs_dirent *d, uint64_t off)
+{
+	mdirent_init(md, off, d->ino, get_inode(d->ino)->generation, d->file_type);
 }
 
 
@@ -2206,16 +2213,21 @@ static void bpfs_commit(void)
 }
 
 
-static int callback_find_dirent(uint64_t blockoff, char *block,
-                                unsigned off, unsigned size, unsigned valid,
-                                uint64_t crawl_start, enum commit commit,
-                                void *sd_void, uint64_t *blockno)
+static int callback_load_directory(uint64_t blockoff, char *block,
+                                   unsigned off, unsigned size, unsigned valid,
+                                   uint64_t crawl_start, enum commit commit,
+                                   void *p_pi_void, uint64_t *blockno)
 {
-	struct str_dirent *sd = (struct str_dirent*) sd_void;
-	unsigned end = off + size;
+	uint64_t parent_ino = *(uint64_t*) p_pi_void;
+	const unsigned end = off + size;
 	while (off + BPFS_DIRENT_MIN_LEN <= end)
 	{
 		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
+		struct mdirent mdirent;
+		int r;
+
+		assert(!(off % BPFS_DIRENT_ALIGN));
+
 		if (!dirent->rec_len)
 		{
 			// end of directory entries in this block
@@ -2225,30 +2237,40 @@ static int callback_find_dirent(uint64_t blockoff, char *block,
 		assert(off <= BPFS_BLOCK_SIZE);
 		if (dirent->ino == BPFS_INO_INVALID)
 			continue;
-		if (sd->str.len == dirent->name_len
-		    && !memcmp(sd->str.str, dirent->name, sd->str.len))
-		{
-			sd->dirent_off = blockoff * BPFS_BLOCK_SIZE
-			                 + off - dirent->rec_len;
-			sd->dirent = dirent;
-			return 1;
-		}
+		assert(dirent->rec_len >= BPFS_DIRENT_LEN(dirent->name_len));
+
+		mdirent_init_dirent(&mdirent, dirent,
+		              blockoff * BPFS_BLOCK_SIZE + off - dirent->rec_len);
+
+		r = dcache_add_dirent(parent_ino, dirent->name, &mdirent);
+		if (r < 0)
+			return r;
 	}
 	return 0;
 }
 
-static int find_dirent(uint64_t parent_ino, struct str_dirent *sd)
+static int find_dirent(uint64_t parent_ino, const char *name,
+                       const struct mdirent **pmd)
 {
-	int r;
-	assert(BPFS_S_ISDIR(get_inode(parent_ino)->mode));
+	const struct mdirent *md;
 
-	r = crawl_data(parent_ino, 0, BPFS_EOF, COMMIT_NONE,
-	               callback_find_dirent, sd);
-	if (r < 0)
-		return r;
-	else if (!r)
+	if (!dcache_has_dir(parent_ino))
+	{
+		int r;
+		r = dcache_add_dir(parent_ino);
+		if (r < 0)
+			return r;
+		r = crawl_data(parent_ino, 0, BPFS_EOF, COMMIT_NONE,
+		               callback_load_directory, &parent_ino);
+		if (r < 0)
+			return r;
+	}
+
+	md = dcache_get_dirent(parent_ino, name);
+	if (!md)
 		return -ENOENT;
-	assert(r == 1);
+	if (pmd)
+		*pmd = md;
 	return 0;
 }
 
@@ -2572,6 +2594,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	struct str_dirent sd = {{name, name_len}, BPFS_EOF, NULL};
 	struct callback_init_inode_data ciid = {mode, fuse_req_ctx(req)};
 	struct callback_addrem_dirent_data cadd = {true, 0, BPFS_INO_INVALID, S_ISDIR(mode)};
+	struct mdirent mdirent;
 	int r;
 
 	assert(!!link == !!S_ISLNK(mode));
@@ -2583,7 +2606,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 		return -ENOENT;
 	assert(BPFS_S_ISDIR(get_inode(parent_ino)->mode));
 
-	if (!find_dirent(parent_ino, &sd))
+	if (!find_dirent(parent_ino, name, NULL))
 		return -EEXIST;
 
 	// TODO: should we init inodes in alloc and below?
@@ -2645,6 +2668,10 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 
 	sd.dirent = get_dirent(parent_ino, sd.dirent_off);
 	assert(sd.dirent);
+
+	mdirent_init_dirent(&mdirent, sd.dirent, sd.dirent_off);
+	r = dcache_add_dirent(parent_ino, name, &mdirent);
+	xassert(!r); // FIXME: recover from OOM
 
 	*pdirent = sd.dirent;
 	return 0;
@@ -2711,6 +2738,16 @@ static void fill_fuse_entry(const struct bpfs_dirent *dirent, struct fuse_entry_
 	memset(e, 0, sizeof(e));
 	e->ino = dirent->ino;
 	e->generation = get_inode(dirent->ino)->generation;
+	e->attr_timeout = STDTIMEOUT;
+	e->entry_timeout = STDTIMEOUT;
+	xcall(bpfs_stat(e->ino, &e->attr));
+}
+
+static void mfill_fuse_entry(const struct mdirent *mdirent, struct fuse_entry_param *e)
+{
+	memset(e, 0, sizeof(e));
+	e->ino = mdirent->ino;
+	e->generation = mdirent->ino_generation;
 	e->attr_timeout = STDTIMEOUT;
 	e->entry_timeout = STDTIMEOUT;
 	xcall(bpfs_stat(e->ino, &e->attr));
@@ -2817,14 +2854,14 @@ static uint64_t directory_parent_get(uint64_t child_ino)
 
 static void fuse_lookup(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 {
-	struct str_dirent sd = {{name, strlen(name) + 1}, BPFS_EOF, NULL};
+	const struct mdirent *mdirent;
 	struct fuse_entry_param e;
 	int r;
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	r = find_dirent(parent_ino, &sd);
+	r = find_dirent(parent_ino, name, &mdirent);
 	if (r < 0)
 	{
 		bpfs_abort();
@@ -2832,9 +2869,9 @@ static void fuse_lookup(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		return;
 	}
 
-	if (sd.dirent->file_type == BPFS_TYPE_DIR)
+	if (mdirent->file_type == BPFS_TYPE_DIR)
 	{
-		r = directory_parent_touch(parent_ino, sd.dirent->ino);
+		r = directory_parent_touch(parent_ino, mdirent->ino);
 		if (r < 0)
 		{
 			bpfs_abort();
@@ -2843,7 +2880,7 @@ static void fuse_lookup(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		}
 	}
 
-	fill_fuse_entry(sd.dirent, &e);
+	mfill_fuse_entry(mdirent, &e);
 	bpfs_commit();
 	xcall(fuse_reply_entry(req, &e));
 }
@@ -3350,7 +3387,7 @@ static int do_unlink_inode(uint64_t ino, struct bpfs_time time_now)
 }
 
 static int do_unlink(uint64_t parent_ino, uint64_t dirent_off,
-                     uint64_t child_ino)
+                     const char *name, uint64_t child_ino)
 {
 	struct bpfs_time time_now = BPFS_TIME_NOW();
 	struct callback_addrem_dirent_data cadd =
@@ -3366,19 +3403,26 @@ static int do_unlink(uint64_t parent_ino, uint64_t dirent_off,
 	if (r < 0)
 		return r;
 
-	return do_unlink_inode(child_ino, time_now);
+	r = do_unlink_inode(child_ino, time_now);
+	if (r < 0)
+		return r;
+
+	r = dcache_rem_dirent(parent_ino, name);
+	assert(!r);
+
+	return 0;
 }
 
 static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
                         const char *name)
 {
-	struct str_dirent sd = {{name, strlen(name) + 1}, BPFS_EOF, NULL};
+	const struct mdirent *mdirent;
 	int r;
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	r = find_dirent(parent_ino, &sd);
+	r = find_dirent(parent_ino, name, &mdirent);
 	if (r < 0)
 	{
 		bpfs_abort();
@@ -3386,7 +3430,7 @@ static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
 		return;
 	}
 
-	r = do_unlink(parent_ino, sd.dirent_off, sd.dirent->ino);
+	r = do_unlink(parent_ino, mdirent->off, name, mdirent->ino);
 	if (r < 0)
 	{
 		bpfs_abort();
@@ -3427,13 +3471,13 @@ static int callback_empty_dir(uint64_t blockoff, char *block,
 
 static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 {
-	struct str_dirent sd = {{name, strlen(name) + 1}, BPFS_EOF, NULL};
+	const struct mdirent *mdirent;
 	int r;
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
 
-	r = find_dirent(parent_ino, &sd);
+	r = find_dirent(parent_ino, name, &mdirent);
 	if (r < 0)
 	{
 		bpfs_abort();
@@ -3441,7 +3485,7 @@ static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		return;
 	}
 
-	r = crawl_data(sd.dirent->ino, 0, BPFS_EOF, COMMIT_NONE,
+	r = crawl_data(mdirent->ino, 0, BPFS_EOF, COMMIT_NONE,
 	               callback_empty_dir, &parent_ino);
 	xassert(r >= 0);
 	if (r == 1)
@@ -3451,7 +3495,7 @@ static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		return;
 	}
 
-	r = do_unlink(parent_ino, sd.dirent_off, sd.dirent->ino);
+	r = do_unlink(parent_ino, mdirent->off, name, mdirent->ino);
 	if (r < 0)
 	{
 		bpfs_abort();
@@ -3491,13 +3535,13 @@ static void fuse_rename(fuse_req_t req,
                         fuse_ino_t src_parent_ino, const char *src_name,
                         fuse_ino_t dst_parent_ino, const char *dst_name)
 {
-	struct str_dirent src_sd = {{src_name, strlen(src_name) + 1}, BPFS_EOF, NULL};
-	struct str_dirent dst_sd = {{dst_name, strlen(dst_name) + 1}, BPFS_EOF, NULL};
+	const struct mdirent *src_md;
+	const struct mdirent *edst_md;
+	struct mdirent ndst_md;
 	struct bpfs_time time_now = BPFS_TIME_NOW();
 	uint64_t invalid_ino = BPFS_INO_INVALID;
 	uint64_t unlinked_ino = BPFS_INO_INVALID;
-	uint64_t child_ino;
-	uint8_t child_file_type;
+	uint64_t dst_off;
 	bool dst_existed;
 	int r;
 
@@ -3505,28 +3549,29 @@ static void fuse_rename(fuse_req_t req,
 	        " dst_parent_ino = %lu, dst_name = '%s')\n",
 	        __FUNCTION__, src_parent_ino, src_name, dst_parent_ino, dst_name);
 
-	r = find_dirent(src_parent_ino, &src_sd);
+	r = find_dirent(src_parent_ino, src_name, &src_md);
 	if (r < 0)
 		goto abort;
 
-	// Copy src dirent fields since changing the src and dst dirents may CoW it
-	child_ino = src_sd.dirent->ino;
-	child_file_type = src_sd.dirent->file_type;
-	src_sd.dirent = NULL;
-
-	(void) find_dirent(dst_parent_ino, &dst_sd);
-	dst_existed = !!dst_sd.dirent;
+	r = find_dirent(dst_parent_ino, dst_name, &edst_md);
+	if (r < 0 && r != -ENOENT)
+		goto abort;
+	dst_existed = (r != -ENOENT);
 
 	if (dst_existed)
 	{
+		unlinked_ino = edst_md->ino;
 		// TODO: check that types match?
-		unlinked_ino = dst_sd.dirent->ino;
+		dst_off = edst_md->off;
 	}
 	else
 	{
+		struct str_dirent dst_sd = {{dst_name, strlen(dst_name) + 1},
+		                            BPFS_EOF, NULL};
 		r = alloc_dirent(dst_parent_ino, &dst_sd);
 		if (r < 0)
 			goto abort;
+		dst_off = dst_sd.dirent_off;
 
 #if !SCSP_ENABLED
 		assert(block_freshly_alloced(bpram_blockno(dst_sd.dirent)));
@@ -3534,12 +3579,12 @@ static void fuse_rename(fuse_req_t req,
 		// TODO: the assignment to dst_sd.dirent assumes that it is not
 		// yet referenced. Assert this (how?) or remove this assumption.
 #endif
-		dst_sd.dirent->file_type = child_file_type;
+		dst_sd.dirent->file_type = src_md->file_type;
 	}
 
-	r = crawl_data_2(dst_parent_ino, dst_sd.dirent_off, 1,
-	                 callback_set_dirent_ino, &child_ino,
-	                 src_parent_ino, src_sd.dirent_off, 1,
+	r = crawl_data_2(dst_parent_ino, dst_off, 1,
+	                 callback_set_dirent_ino, (void*) &src_md->ino,
+	                 src_parent_ino, src_md->off, 1,
 	                 callback_set_dirent_ino, &invalid_ino,
 	                 COMMIT_ATOMIC);
 	if (r < 0)
@@ -3557,7 +3602,7 @@ static void fuse_rename(fuse_req_t req,
 			goto abort;
 	}
 
-	if (child_file_type == BPFS_TYPE_DIR)
+	if (src_md->file_type == BPFS_TYPE_DIR)
 	{
 		int nlinks_delta = -1;
 
@@ -3577,7 +3622,7 @@ static void fuse_rename(fuse_req_t req,
 		// Update the child ino's ctime because rename can change its
 		// ".." dirent's ino field. We would make this field update here,
 		// but the ".." dirent is computed on the fly and not stored on disk.
-		r = crawl_inode(child_ino, COMMIT_ATOMIC, callback_set_ctime,
+		r = crawl_inode(src_md->ino, COMMIT_ATOMIC, callback_set_ctime,
 		                &time_now);
 		if (r < 0)
 			goto abort;
@@ -3588,7 +3633,20 @@ static void fuse_rename(fuse_req_t req,
 		r = do_unlink_inode(unlinked_ino, time_now);
 		if (r < 0)
 			goto abort;
+
+		r = dcache_rem_dirent(dst_parent_ino, dst_name);
+		assert(!r);
 	}
+
+	r = dcache_rem_dirent(src_parent_ino, src_name);
+	assert(!r);
+	mdirent_init(&ndst_md,
+	             dst_off,
+	             src_md->ino,
+	             get_inode(src_md->ino)->generation,
+	             src_md->file_type);
+	r = dcache_add_dirent(dst_parent_ino, dst_name, &ndst_md);
+	xassert(!r); // FIXME: recover from OOM
 
 	bpfs_commit();
 	xcall(fuse_reply_err(req, FUSE_ERR_SUCCESS));
@@ -3604,6 +3662,7 @@ static void fuse_link(fuse_req_t req, fuse_ino_t fuse_ino,
 {
 	uint64_t ino = fuse_ino; // fuse_ino_t may be a uint32_t and we use &ino
 	size_t name_len = strlen(name) + 1;
+	struct mdirent mdirent;
 	struct str_dirent sd = {{name, name_len}, BPFS_EOF, NULL};
 	int nlinks_delta = 1;
 	struct bpfs_time time_now = BPFS_TIME_NOW();
@@ -3634,7 +3693,7 @@ static void fuse_link(fuse_req_t req, fuse_ino_t fuse_ino,
 	}
 	assert(BPFS_S_ISDIR(get_inode(parent_ino)->mode));
 
-	if (!find_dirent(parent_ino, &sd))
+	if (!find_dirent(parent_ino, name, NULL))
 	{
 		r = -EEXIST;
 		goto abort;
@@ -3663,6 +3722,10 @@ static void fuse_link(fuse_req_t req, fuse_ino_t fuse_ino,
 		goto abort;
 	sd.dirent = get_dirent(parent_ino, sd.dirent_off);
 	assert(sd.dirent);
+
+	mdirent_init_dirent(&mdirent, sd.dirent, sd.dirent_off);
+	r = dcache_add_dirent(parent_ino, name, &mdirent);
+	xassert(!r); // FIXME: recover from OOM
 
 	fill_fuse_entry(sd.dirent, &e);
 	bpfs_commit();
@@ -4377,6 +4440,7 @@ int main(int argc, char **argv)
 #endif
 
 	xcall(directory_parent_init());
+	xcall(dcache_init());
 
 	memmove(argv + 1, argv + 3, (argc - 2) * sizeof(*argv));
 	argc -= 2;
@@ -4447,10 +4511,9 @@ int main(int argc, char **argv)
 #endif
 	fargv = NULL;
 
+	dcache_destroy();
 	directory_parent_destroy();
-
 	destroy_allocations();
-
 	destroy_bpram();
 
 	return r;

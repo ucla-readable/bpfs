@@ -87,6 +87,12 @@
 #define ROUNDUP64(a, n)   (((uint64_t) (a) + n - 1) & ~(n - 1))
 #define ROUNDDOWN64(a, n) (((uint64_t) (a)) & ~((n) - 1))
 
+#define container_of(ptr, type, member) \
+	({ \
+		typeof(((type *) 0)->member) * __mptr = (ptr); \
+		(type *) (uintptr_t) ((const char *) __mptr - offsetof(type, member)); \
+	})
+
 #define NBLOCKS_FOR_NBYTES(nbytes) \
 	(((nbytes) + BPFS_BLOCK_SIZE - 1) / BPFS_BLOCK_SIZE)
 
