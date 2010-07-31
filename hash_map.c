@@ -54,9 +54,6 @@ struct hash_map {
 
 //
 // The hashing function.
-// For now only one hashing function is needed; if hash_map's usage grows
-// beyond that of pointers hash_map should be enhanced to allow other hash
-// functions.
 // Essentially, GNU C++ STL 3.4's hash_fun and hashtable.
 
 // Note: assumes long is at least 32 bits.
