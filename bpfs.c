@@ -3475,6 +3475,7 @@ static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
 	}
 }
 
+#ifndef NDEBUG
 static int callback_empty_dir(uint64_t blockoff, char *block,
                               unsigned off, unsigned size, unsigned valid,
                               uint64_t crawl_start, enum commit commit,
@@ -3500,6 +3501,7 @@ static int callback_empty_dir(uint64_t blockoff, char *block,
 	}
 	return 0;
 }
+#endif
 
 static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 {
@@ -3517,6 +3519,7 @@ static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		return;
 	}
 
+#ifndef NDEBUG
 	r = crawl_data(mdirent->ino, 0, BPFS_EOF, COMMIT_NONE,
 	               callback_empty_dir, &parent_ino);
 	xassert(r >= 0);
@@ -3526,6 +3529,7 @@ static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		xcall(fuse_reply_err(req, ENOTEMPTY));
 		return;
 	}
+#endif
 
 	r = do_unlink(parent_ino, mdirent);
 	if (r < 0)
