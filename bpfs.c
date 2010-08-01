@@ -2789,105 +2789,6 @@ static void mfill_fuse_entry(const struct mdirent *mdirent, struct fuse_entry_pa
 	xcall(bpfs_stat(e->ino, &e->attr));
 }
 
-
-// directory ino -> parent ino map
-// (this mapping, "..", is not stored on disk)
-
-struct directory_parent {
-	uint64_t parent_ino;
-	unsigned long ntouches;
-};
-
-static hash_map_t* directory_parent_map;
-
-static int directory_parent_init(void)
-{
-	assert(!directory_parent_map);
-	directory_parent_map = hash_map_create_ptr();
-	if (!directory_parent_map)
-		return -ENOMEM;
-	return 0;
-}
-
-static void directory_parent_destroy(void)
-{
-	hash_map_it2_t it = hash_map_it2_create(directory_parent_map);
-	while (hash_map_it2_next(&it))
-	{
-		free(it.val);
-		it.val = NULL;
-	}
-	hash_map_destroy(directory_parent_map);
-	directory_parent_map = NULL;
-}
-
-static int directory_parent_touch(uint64_t parent_ino, uint64_t child_ino)
-{
-	void *key = (void*) (uintptr_t) child_ino;
-	struct directory_parent *dp;
-	int r;
-
-	assert(((uint64_t) (uintptr_t) key) == child_ino);
-	assert(child_ino != BPFS_INO_ROOT);
-
-	dp = hash_map_find_val(directory_parent_map, key);
-	if (!dp)
-	{
-		dp = malloc(sizeof(*dp));
-		if (!dp)
-			return -ENOMEM;
-		dp->parent_ino = parent_ino;
-		dp->ntouches = 0;
-
-		if ((r = hash_map_insert(directory_parent_map, key, dp)) < 0)
-		{
-			free(dp);
-			return r;
-		}
-	}
-
-	dp->ntouches++;
-	xassert(dp->ntouches);
-
-	return 0;
-}
-
-static void directory_parent_forget(uint64_t child_ino, unsigned long ntouch)
-{
-	void *key = (void*) (uintptr_t) child_ino;
-	struct directory_parent *dp;
-
-	assert(((uint64_t) (uintptr_t) key) == child_ino);
-
-	dp = hash_map_find_val(directory_parent_map, key);
-	if (dp)
-	{
-		assert(dp->ntouches);
-		dp->ntouches--;
-
-		if (!dp->ntouches)
-		{
-			hash_map_erase(directory_parent_map, key);
-			free(dp);
-		}
-	}
-}
-
-static uint64_t directory_parent_get(uint64_t child_ino)
-{
-	void *key = (void*) (uintptr_t) child_ino;
-	struct directory_parent *dp;
-
-	assert(((uint64_t) (uintptr_t) key) == child_ino);
-
-	if (child_ino == BPFS_INO_ROOT)
-		return BPFS_INO_ROOT;
-	if ((dp = hash_map_find_val(directory_parent_map, key)))
-		return dp->parent_ino;
-	return BPFS_INO_INVALID;
-}
-
-
 static void fuse_lookup(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 {
 	const struct mdirent *mdirent;
@@ -2905,31 +2806,20 @@ static void fuse_lookup(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		return;
 	}
 
-	if (mdirent->file_type == BPFS_TYPE_DIR)
-	{
-		r = directory_parent_touch(parent_ino, mdirent->ino);
-		if (r < 0)
-		{
-			bpfs_abort();
-			xcall(fuse_reply_err(req, -r));
-			return;
-		}
-	}
-
 	mfill_fuse_entry(mdirent, &e);
 	bpfs_commit();
 	xcall(fuse_reply_entry(req, &e));
 }
 
+#if 0
 static void fuse_forget(fuse_req_t req, fuse_ino_t ino, unsigned long nlookup)
 {
 	Dprintf("%s(ino = %lu, nlookup = %lu)\n", __FUNCTION__, ino, nlookup);
 
-	directory_parent_forget(ino, nlookup);
-
 	bpfs_commit();
 	fuse_reply_none(req);
 }
+#endif
 
 // Not implemented: bpfs_access() (use default_permissions instead)
 
@@ -3781,14 +3671,16 @@ static void fuse_link(fuse_req_t req, fuse_ino_t fuse_ino,
 	xcall(fuse_reply_err(req, -r));
 }
 
-#if 0
 static void fuse_opendir(fuse_req_t req, fuse_ino_t ino,
                          struct fuse_file_info *fi)
 {
 	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
+
+	fi->fh = ino;
+
 	bpfs_commit();
+	xcall(fuse_reply_open(req, fi));
 }
-#endif
 
 struct readdir_params
 {
@@ -3874,6 +3766,7 @@ static int callback_set_atime(char *block, unsigned off,
 static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
                          off_t off, struct fuse_file_info *fi)
 {
+	uint64_t parent_ino = fi->fh;
 	struct bpfs_inode *inode = get_inode(ino);
 	struct readdir_params params = {req, max_size, 0, NULL};
 	struct bpfs_time time_now = BPFS_TIME_NOW();
@@ -3903,8 +3796,7 @@ static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
 		off_t oldsize = params.total_size;
 
 		memset(&stbuf, 0, sizeof(stbuf));
-		stbuf.st_ino = (off == 0) ? ino : directory_parent_get(ino);
-		assert(stbuf.st_ino != BPFS_INO_INVALID);
+		stbuf.st_ino = (off == 0) ? ino : parent_ino;
 		stbuf.st_mode = S_IFDIR;
 		off++;
 
@@ -4227,7 +4119,7 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 
 	ADD_FUSE_CALLBACK(statfs);
 	ADD_FUSE_CALLBACK(lookup);
-	ADD_FUSE_CALLBACK(forget);
+//	ADD_FUSE_CALLBACK(forget);
 	ADD_FUSE_CALLBACK(getattr);
 	ADD_FUSE_CALLBACK(setattr);
 	ADD_FUSE_CALLBACK(readlink);
@@ -4244,7 +4136,7 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 //	ADD_FUSE_CALLBACK(listxattr);
 //	ADD_FUSE_CALLBACK(removexattr);
 
-//	ADD_FUSE_CALLBACK(opendir);
+	ADD_FUSE_CALLBACK(opendir);
 	ADD_FUSE_CALLBACK(readdir);
 //	ADD_FUSE_CALLBACK(releasedir);
 	ADD_FUSE_CALLBACK(fsyncdir);
@@ -4483,7 +4375,6 @@ int main(int argc, char **argv)
 	printf("Block poisoning enabled. Write counting will be incorrect.\n");
 #endif
 
-	xcall(directory_parent_init());
 	xcall(dcache_init());
 
 	memmove(argv + 1, argv + 3, (argc - 2) * sizeof(*argv));
@@ -4556,7 +4447,6 @@ int main(int argc, char **argv)
 	fargv = NULL;
 
 	dcache_destroy();
-	directory_parent_destroy();
 	destroy_allocations();
 	destroy_bpram();
 
