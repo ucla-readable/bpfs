@@ -134,6 +134,14 @@ static struct bpfs_super *bpfs_super;
 
 static char* get_block(uint64_t blockno);
 
+// @param blockoff block no in the file (blockoff * BPFS_BLOCK_SIZE is byte off)
+// @param block pointer to the block
+// @param off offset into the block
+// @param valid number of valid bytes in the block
+// @param crawl_start byte offset into the file at which the crawl started
+// @param commit allowed commit type
+// @param user user data
+// @param blockno *blockno is the block number (in/out)
 // Return <0 for error, 0 for success, 1 for success and stop crawl
 typedef int (*crawl_callback)(uint64_t blockoff, char *block,
                               unsigned off, unsigned size, unsigned valid,
@@ -2245,7 +2253,7 @@ static int callback_load_directory(uint64_t blockoff, char *block,
 		assert(dirent->rec_len >= BPFS_DIRENT_LEN(dirent->name_len));
 
 		mdirent_init_dirent(&mdirent, dirent,
-		              blockoff * BPFS_BLOCK_SIZE + off - dirent->rec_len);
+		                    blockoff * BPFS_BLOCK_SIZE + off - dirent->rec_len);
 
 		r = dcache_add_dirent(parent_ino, dirent->name, &mdirent);
 		if (r < 0)
