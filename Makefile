@@ -17,18 +17,20 @@ TAGS = tags TAGS
 SRCS = bpfs.c mkfs.bpfs.c mkbpfs.c mkbpfs.h dcache.c dcache.h \
        bpfs_structs.h util.h hash_map.c hash_map.h vector.c vector.h \
        pool.h pwrite.c
+# Non-compile sources (at least, for this Makefile):
+NCSRCS = bench/bpramcount.cpp bench/microbench.py
 
 all: $(BIN) $(TAGS)
 
 clean:
 	rm -f $(BIN) $(OBJS) $(TAGS)
 
-tags: $(SRCS)
+tags: $(SRCS) $(NCSRCS)
 	@echo + ctags tags
-	@if ctags --version | grep -q Exuberant; then ctags $(SRCS); else touch $@; fi
-TAGS: $(SRCS)
+	@if ctags --version | grep -q Exuberant; then ctags $(SRCS) $(NCSRCS); else touch $@; fi
+TAGS: $(SRCS) $(NCSRCS)
 	@echo + ctags TAGS
-	@if ctags --version | grep -q Exuberant; then ctags -e $(SRCS); else touch $@; fi
+	@if ctags --version | grep -q Exuberant; then ctags -e $(SRCS) $(NCSRCS); else touch $@; fi
 
 bpfs.o: bpfs.c mkbpfs.h bpfs_structs.h dcache.h util.h hash_map.h
 	$(CC) $(CFLAGS) `pkg-config --cflags fuse` -c -o $@ $<
