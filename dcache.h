@@ -10,15 +10,18 @@
 
 struct mdirent
 {
+	const char *name;
 	uint64_t off;
 	uint64_t ino;
 	uint64_t ino_generation;
+	uint16_t rec_len;
 	uint8_t file_type;
 };
 
 static __inline
 void mdirent_init(struct mdirent *md,
-                  uint64_t off, uint64_t ino, uint64_t ino_gen, uint8_t ft)
+                  const char *name, uint64_t off, uint64_t ino,
+                  uint64_t ino_gen, uint16_t rec_len, uint8_t ft)
 	__attribute__((always_inline));
 
 //
@@ -52,15 +55,31 @@ const struct mdirent* dcache_get_dirent(uint64_t parent_ino, const char *name);
 int dcache_rem_dirent(uint64_t parent_ino, const char *name);
 
 //
+// Free directory entries
+
+// Add a free dirent.
+int dcache_add_free(uint64_t parent_ino, uint64_t off, uint16_t rec_len);
+
+#define DCACHE_FREE_NONE UINT64_MAX
+
+// Find a free dirent with a rec_len at least min_rec_len,
+// remove it from the set of free dirents, and return its offset.
+// Returns DCACHE_FREE_NONE if none is found.
+uint64_t dcache_take_free(uint64_t parent_ino, uint16_t min_rec_len);
+
+//
 // Inline implementation
 
 static __inline
 void mdirent_init(struct mdirent *md,
-                  uint64_t off, uint64_t ino, uint64_t ino_gen, uint8_t ft)
+                  const char *name, uint64_t off, uint64_t ino,
+                  uint64_t ino_gen, uint16_t rec_len, uint8_t ft)
 {
+	md->name = name;
 	md->off = off;
 	md->ino = ino;
 	md->ino_generation = ino_gen;
+	md->rec_len = rec_len;
 	md->file_type = ft;
 }
 

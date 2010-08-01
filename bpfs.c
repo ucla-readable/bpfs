@@ -975,7 +975,8 @@ static unsigned block_offset(const void *x)
 static void mdirent_init_dirent(struct mdirent *md,
                           const struct bpfs_dirent *d, uint64_t off)
 {
-	mdirent_init(md, off, d->ino, get_inode(d->ino)->generation, d->file_type);
+	mdirent_init(md, d->name, off, d->ino, get_inode(d->ino)->generation,
+	             d->rec_len, d->file_type);
 }
 
 
@@ -2231,6 +2232,10 @@ static int callback_load_directory(uint64_t blockoff, char *block,
 		if (!dirent->rec_len)
 		{
 			// end of directory entries in this block
+			r = dcache_add_free(parent_ino, blockoff * BPFS_BLOCK_SIZE + off,
+			                    BPFS_BLOCK_SIZE - off);
+			if (r < 0)
+				return r;
 			break;
 		}
 		off += dirent->rec_len;
@@ -2300,37 +2305,32 @@ static struct bpfs_dirent* get_dirent(uint64_t parent_ino, uint64_t dirent_off)
 	return dirent;
 }
 
+struct sd_ino
+{
+	uint64_t parent_ino;
+	struct str_dirent *sd;
+};
+
 static int callback_dirent_plug(uint64_t blockoff, char *block,
                                 unsigned off, unsigned size,  unsigned valid,
                                 uint64_t crawl_start, enum commit commit,
-                                void *sd_void, uint64_t *blockno)
+                                void *si_void, uint64_t *blockno)
 {
-	struct str_dirent *sd = (struct str_dirent*) sd_void;
-	struct bpfs_dirent *dirent;
-	const unsigned end = off + size;
+	struct sd_ino *si = (struct sd_ino*) si_void;
+	struct str_dirent *sd = si->sd;
+	struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
 	const uint64_t min_hole_size = BPFS_DIRENT_LEN(sd->str.len);
+#ifndef NDEBUG
+	const unsigned end = off + size;
+#endif
 
-	while (off + min_hole_size <= end)
-	{
-		assert(!(off % BPFS_DIRENT_ALIGN));
-		dirent = (struct bpfs_dirent*) (block + off);
-		if (!dirent->rec_len)
-		{
-			// end of directory entries in this block
-			goto found;
-		}
-		if (dirent->ino == BPFS_INO_INVALID && dirent->rec_len >= min_hole_size)
-		{
-			// empty dirent
-			goto found;
-		}
-		off += dirent->rec_len;
-		assert(off <= BPFS_BLOCK_SIZE);
-	}
-	return 0;
-
-  found:
 	assert(commit != COMMIT_NONE);
+	assert(!(off % BPFS_DIRENT_ALIGN));
+	assert(off + min_hole_size <= end);
+	assert(!dirent->rec_len || dirent->rec_len >= min_hole_size);
+	assert(BPFS_BLOCK_SIZE - off >= min_hole_size);
+	// Not necessarily true for a dirent's first use:
+	// assert(dirent->ino == BPFS_INO_INVALID);
 
 	// "#if !COW_OPT" rather than "if (commit == COMMIT_COPY)" because crawl()
 	// is given a range to write, so "commit" is mostly COPY in this function:
@@ -2350,8 +2350,15 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 	{
 		if (off + min_hole_size + BPFS_DIRENT_MIN_LEN <= BPFS_BLOCK_SIZE)
 		{
-			struct bpfs_dirent *next_dirent = (struct bpfs_dirent*) (block + off + min_hole_size);
+			unsigned next_off = off + min_hole_size;
+			struct bpfs_dirent *next_dirent
+				= (struct bpfs_dirent*) (block + next_off);
+			int r;
 			next_dirent->rec_len = 0;
+			r = dcache_add_free(si->parent_ino,
+			                    blockoff * BPFS_BLOCK_SIZE + next_off,
+			                    BPFS_BLOCK_SIZE - next_off);
+			xassert(!r); // FIXME: recover from OOM
 		}
 		dirent->rec_len = min_hole_size;
 	}
@@ -2365,9 +2372,10 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 static int callback_dirent_append(uint64_t blockoff, char *block,
                                   unsigned off, unsigned size,  unsigned valid,
                                   uint64_t crawl_start, enum commit commit,
-                                  void *sd_void, uint64_t *blockno)
+                                  void *si_void, uint64_t *blockno)
 {
-	struct str_dirent *sd = (struct str_dirent*) sd_void;
+	struct sd_ino *si = (struct sd_ino*) si_void;
+	struct str_dirent *sd = si->sd;
 	uint64_t hole_size = BPFS_DIRENT_LEN(sd->str.len);
 
 	assert(!off && size == BPFS_BLOCK_SIZE);
@@ -2382,7 +2390,13 @@ static int callback_dirent_append(uint64_t blockoff, char *block,
 	if (hole_size + BPFS_DIRENT_MIN_LEN <= BPFS_BLOCK_SIZE)
 	{
 		struct bpfs_dirent *next_dirent = (struct bpfs_dirent*) (block + hole_size);
+		int r;
 		next_dirent->rec_len = 0;
+		r = dcache_add_free(si->parent_ino,
+		                    blockoff * BPFS_BLOCK_SIZE + hole_size,
+		                    BPFS_BLOCK_SIZE - hole_size);
+		if (r < 0)
+			return r;
 	}
 	sd->dirent->rec_len = hole_size;
 
@@ -2395,17 +2409,28 @@ static int callback_dirent_append(uint64_t blockoff, char *block,
 
 static int alloc_dirent(uint64_t parent_ino, struct str_dirent *sd)
 {
+	struct sd_ino si = { .parent_ino = parent_ino, .sd = sd };
+	uint64_t off;
 	int r;
 
-	r = crawl_data(parent_ino, 0, BPFS_EOF, COMMIT_ATOMIC,
-	               callback_dirent_plug, sd);
-	if (r < 0)
-		return r;
-
-	if (!r)
+	off = dcache_take_free(parent_ino, BPFS_DIRENT_LEN(sd->str.len));
+	if (off != DCACHE_FREE_NONE)
+	{
+		r = crawl_data(parent_ino, off,
+		               BPFS_BLOCK_SIZE - (off % BPFS_BLOCK_SIZE),
+		               COMMIT_ATOMIC, callback_dirent_plug, &si);
+		if (r < 0)
+		{
+			// FIXME: need to dcache_add_free(parent_ino, off, ?);
+			xassert(0);
+			return r;
+		}
+		assert(r == 1);
+	}
+	else
 	{
 		r = crawl_data(parent_ino, BPFS_EOF, BPFS_BLOCK_SIZE,
-		               COMMIT_ATOMIC, callback_dirent_append, sd);
+		               COMMIT_ATOMIC, callback_dirent_append, &si);
 		if (r < 0)
 			return r;
 	}
@@ -2647,6 +2672,8 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 			ndirent = (struct bpfs_dirent*) get_block(inode->root.ha.addr);
 			assert(ndirent);
 			ndirent->rec_len = 0;
+			// this new directory is not yet in the dcache;
+			// no need to add this free dirent to the dcache
 		}
 		else if (S_ISLNK(mode))
 		{
@@ -3386,13 +3413,12 @@ static int do_unlink_inode(uint64_t ino, struct bpfs_time time_now)
 	return 0;
 }
 
-static int do_unlink(uint64_t parent_ino, uint64_t dirent_off,
-                     const char *name, uint64_t child_ino)
+static int do_unlink(uint64_t parent_ino, const struct mdirent *md)
 {
 	struct bpfs_time time_now = BPFS_TIME_NOW();
 	struct callback_addrem_dirent_data cadd =
-		{false, dirent_off, BPFS_INO_INVALID,
-		 BPFS_S_ISDIR(get_inode(child_ino)->mode)};
+		{false, md->off, BPFS_INO_INVALID,
+		 BPFS_S_ISDIR(get_inode(md->ino)->mode)};
 	int r;
 
 	r = crawl_inode(parent_ino, COMMIT_ATOMIC, callback_addrem_dirent, &cadd);
@@ -3403,11 +3429,14 @@ static int do_unlink(uint64_t parent_ino, uint64_t dirent_off,
 	if (r < 0)
 		return r;
 
-	r = do_unlink_inode(child_ino, time_now);
+	r = do_unlink_inode(md->ino, time_now);
 	if (r < 0)
 		return r;
 
-	r = dcache_rem_dirent(parent_ino, name);
+	r = dcache_add_free(parent_ino, md->off, md->rec_len);
+	xassert(!r); // FIXME: recover from OOM
+
+	r = dcache_rem_dirent(parent_ino, md->name);
 	assert(!r);
 
 	return 0;
@@ -3430,7 +3459,7 @@ static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
 		return;
 	}
 
-	r = do_unlink(parent_ino, mdirent->off, name, mdirent->ino);
+	r = do_unlink(parent_ino, mdirent);
 	if (r < 0)
 	{
 		bpfs_abort();
@@ -3495,7 +3524,7 @@ static void fuse_rmdir(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 		return;
 	}
 
-	r = do_unlink(parent_ino, mdirent->off, name, mdirent->ino);
+	r = do_unlink(parent_ino, mdirent);
 	if (r < 0)
 	{
 		bpfs_abort();
@@ -3538,6 +3567,7 @@ static void fuse_rename(fuse_req_t req,
 	const struct mdirent *src_md;
 	const struct mdirent *edst_md;
 	struct mdirent ndst_md;
+	struct bpfs_dirent *dst_dirent;
 	struct bpfs_time time_now = BPFS_TIME_NOW();
 	uint64_t invalid_ino = BPFS_INO_INVALID;
 	uint64_t unlinked_ino = BPFS_INO_INVALID;
@@ -3638,13 +3668,14 @@ static void fuse_rename(fuse_req_t req,
 		assert(!r);
 	}
 
+	r = dcache_add_free(src_parent_ino, src_md->off, src_md->rec_len);
+	xassert(!r); // FIXME: recover from OOM
 	r = dcache_rem_dirent(src_parent_ino, src_name);
 	assert(!r);
-	mdirent_init(&ndst_md,
-	             dst_off,
-	             src_md->ino,
-	             get_inode(src_md->ino)->generation,
-	             src_md->file_type);
+
+	dst_dirent = get_dirent(dst_parent_ino, dst_off);
+	assert(dst_dirent);
+	mdirent_init_dirent(&ndst_md, dst_dirent, dst_off);
 	r = dcache_add_dirent(dst_parent_ino, dst_name, &ndst_md);
 	xassert(!r); // FIXME: recover from OOM
 
