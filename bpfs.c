@@ -2335,18 +2335,16 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 	// Not necessarily true for a dirent's first use:
 	// assert(dirent->ino == BPFS_INO_INVALID);
 
-	// "#if !COW_OPT" rather than "if (commit == COMMIT_COPY)" because crawl()
-	// is given a range to write, so "commit" is mostly COPY in this function:
-#if !COW_OPT
+	if (commit == COMMIT_COPY)
 	{
 		uint64_t new_blockno = cow_block_entire(*blockno);
+		assert(COMMIT_COPY == COMMIT_ATOMIC);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 		block = get_block(new_blockno);
 		dirent = (struct bpfs_dirent*) (block + off);
 		*blockno = new_blockno;
 	}
-#endif
 
 	// TODO: set file_type here
 	if (!dirent->rec_len)
