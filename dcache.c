@@ -209,6 +209,13 @@ int dcache_add_dir(uint64_t ino)
 	return 0;
 }
 
+void dcache_rem_dir(uint64_t ino)
+{
+	struct mdirectory *mdir = hash_map_find_val(dcache.directories,
+	                                            ino2key(ino));
+	assert(mdir);
+	mdirectory_rem(mdir);
+}
 
 int dcache_add_dirent(uint64_t parent_ino, const char *name,
                       const struct mdirent *mdo)

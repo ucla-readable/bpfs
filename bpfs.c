@@ -2268,7 +2268,10 @@ static int find_dirent(uint64_t parent_ino, const char *name,
 		r = crawl_data(parent_ino, 0, BPFS_EOF, COMMIT_NONE,
 		               callback_load_directory, &parent_ino);
 		if (r < 0)
+		{
+			dcache_rem_dir(parent_ino);
 			return r;
+		}
 	}
 
 	md = dcache_get_dirent(parent_ino, name);

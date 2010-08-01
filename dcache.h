@@ -39,6 +39,9 @@ bool dcache_has_dir(uint64_t ino);
 // Add the ino directory.
 int dcache_add_dir(uint64_t ino);
 
+// Remove the ino directory and its contents.
+void dcache_rem_dir(uint64_t ino);
+
 //
 // Directory entries
 
