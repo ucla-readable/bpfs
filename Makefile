@@ -12,9 +12,9 @@ CFLAGS = -Wall -g
 .PHONY: all clean
 
 BIN = bpfs mkfs.bpfs pwrite
-OBJS = bpfs.o mkfs.bpfs.o mkbpfs.o dcache.o hash_map.o vector.o
+OBJS = bpfs.o crawler.o mkfs.bpfs.o mkbpfs.o dcache.o hash_map.o vector.o
 TAGS = tags TAGS
-SRCS = bpfs.c mkfs.bpfs.c mkbpfs.c mkbpfs.h dcache.c dcache.h \
+SRCS = bpfs.c crawler.c mkfs.bpfs.c mkbpfs.c mkbpfs.h dcache.c dcache.h \
        bpfs_structs.h util.h hash_map.c hash_map.h vector.c vector.h \
        pool.h pwrite.c
 # Non-compile sources (at least, for this Makefile):
@@ -32,10 +32,13 @@ TAGS: $(SRCS) $(NCSRCS)
 	@echo + ctags TAGS
 	@if ctags --version | grep -q Exuberant; then ctags -e $(SRCS) $(NCSRCS); else touch $@; fi
 
-bpfs.o: bpfs.c mkbpfs.h bpfs_structs.h dcache.h util.h hash_map.h
+bpfs.o: bpfs.c crawler.c mkbpfs.h bpfs_structs.h dcache.h util.h hash_map.h
 	$(CC) $(CFLAGS) `pkg-config --cflags fuse` -c -o $@ $<
 
 mkfs.bpfs.o: mkfs.bpfs.c mkbpfs.h bpfs_structs.h util.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+crawler.o: crawler.c crawler.h bpfs_structs.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 mkbpfs.o: mkbpfs.c mkbpfs.h bpfs_structs.h util.h
@@ -50,7 +53,7 @@ vector.o: vector.c vector.h
 hash_map.o: hash_map.c hash_map.h vector.h pool.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-bpfs: bpfs.o mkbpfs.o dcache.o hash_map.o vector.o
+bpfs: bpfs.o crawler.o mkbpfs.o dcache.o hash_map.o vector.o
 	$(CC) $(CFLAGS) $(LDFLAGS) `pkg-config --libs fuse` -luuid -o $@ $^
 
 mkfs.bpfs: mkfs.bpfs.o mkbpfs.o
