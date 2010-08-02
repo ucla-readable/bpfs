@@ -13,17 +13,16 @@
 - something involving rename
 - small, large appends, overwrites
 - create large file
-- well-respected benchmark
+- well-respected benchmark (IOzone, FileBench (FSL port?))
 
 * measurements
-- enable larger writes with (fuse 2.8 and -o big_writes) or -o direct_io?
-- compare SCSP to SP. and minmal? and ext2,ext3,ext4,btrfs?
+- compare SCSP to SP. and minimal? and ext2,ext3,ext4,btrfs?
 - bytes written
   - measure actual writes
     - what code contributes how much to this measurement?
-    - valgrind? instrument code? (macros around writes? decls?)
 	- must the controller write an entire cache line? if so, measure this?
   - measure #bytes that change in file system image
+- best, worst, and "expected" results
 - number of epoch barriers?
 - correctness
   - detect consistency
@@ -33,19 +32,32 @@
 * limits
 - SCSP write() can be atomic, but is it guaranteed? eg failed allocation part
   way through a large write? in general, how does abort work?
+  perhaps there are two types of failures:
+  - one write makes all the preceeding writes visible
+    - easy to solve: log frees/allocs and reverse on failure
+  - more than one live write (eg cmtime with write or rename)
+    - is this ok for most apps? can we make it better? eg guarantee
+      that if data is modified, the mtime was updated? or vice-versa.
+    - can I turn these into single commits without much overhead?
 
 * long term notes
 - code seems too complicated. maybe how to commit is tied too closely to other?
 - when SCSP has to COW, would it ever be helpful to wait on committing the change for a later write that would have to re-COW a shared set of blocks?
 	- SP mode would do this
 - can SCSP work with one crawl down and then back up?
-- could make truncate(expand) write fewer bytes by adding an inode field
-	'valid', where valid <= nbytes
+
+* unimplemented write optimizations
+- make truncate(expand) write fewer bytes by adding an inode field 'valid'
+  where valid <= nbytes
 - could not CoW unused inodes and dirent regions
+  - do not CoW the entire dirent block(s) for rename (skip the ino field(s))
+  - do not CoW unused and to-be-overwritten dirent entries for rename
+  - do not CoW unused and to-be-overwritten inodes for rename
+- only CoW indir block portions that will not be overwritten
+- changing the height separately from the root addr is needless for append
 
 * near term notes
 - convince self that current code is correct.
-- fuse_rename() needs restructuring. probably needs crawl_inode_2().
 - correctness test: snapshot ram before op, during op, and after: during should "match" before or after
 	- want to snapshot during not during a machine instruction?
 	- maybe track which bytes/pages change and only compare them for speed?
@@ -57,12 +69,40 @@
 - fixme: commit_abort() does not abort entire syscall in SCSP
 - do not allocate the first directory block when creating a directory?
 - consider kernel_cache and *_timeout
+- replace dcache bits for find_dirent() with persistent hashes in dirs?
 
 * current work
-- implement scsp
+- fix rename_clobber freeze
 - add benchmarks and measurement tools
+	- more benchmarks to contrast performance between bpfs and other fses?
+	- more macro/real-world benchmarks that involve durability
+		- how should we evaluate disk sync costs? #bytes written.
 	- benchmark ext3/4 with data journaling, too
+	- microbenchmark(s) for each syscall?
+	- add macrobenchmarks: postmark, untar, rm, and a good one
+		- don't need to use bpramcount for setup
+	- expand microbenchmark repetition to ~fill ext[34] journals?
+	- analyze contributions of optimizations
+		- break optimizations down into pieces
+	- use impressions?
+- add new interfaces?
+	- sparse atomic write (like rename) (writev? in fuse-git?)
+	- perhaps more generally, write coalescing (but not necessarily atomic?)
+	- FUSE splice? (what will it do? larger atomic write?)
+	- do not update mtime on write/atime on read
+	- operations to take advantage of no seeks: move data between files, ?
+	- does single-ref/atomic write make block sharing impossible?
+		- not at all. but unsharing takes more writes than were there no shr. (eg keep an on-disk or in-memory count for each block.)
+- sort of feel that it is too much of a toy/not under realistic workloads.
+	real workloads/hardware may make the performance benefits inconsequential
+	or negative.
+- is it ok to optimize only writes? (not reads or other aspects)
+	- optimize runtime to make testing easier? to know it won't be a bottleneck?
+		crawl_indir, crawl_tree_ref, crawl_inode
+- should I prototype ENOSPC recovery?
+- consider journaling
+- could expand atomic writes to 16B: gcc -mcx16 and CMPXCHG16B
 
-* on the horizon
+* possibly useful
 - add more code documentation? (function definitions?) and/or clean up.
 - make code fast in time, too, for ucsd?
