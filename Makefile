@@ -3,7 +3,7 @@ CFLAGS = -Wall -g
 # Remove debug checks:
 #CFLAGS += -DNDEBUG
 # Enable optimizations:
-#CFLAGS += -O3 -march=native
+#CFLAGS += -O3 -march=native # GCC >4.4: -flto
 # Enable Nehalem optimizations (GCC 4.4 -march only knows up to Core2):
 #CFLAGS += -msahf -msse4 -msse4.1 -msse4.2
 # Enable gprof:
@@ -54,7 +54,7 @@ hash_map.o: hash_map.c hash_map.h vector.h pool.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 bpfs: bpfs.o crawler.o mkbpfs.o dcache.o hash_map.o vector.o
-	$(CC) $(CFLAGS) $(LDFLAGS) `pkg-config --libs fuse` -luuid -o $@ $^
+	$(CC) $(CFLAGS) `pkg-config --libs fuse` -luuid -o $@ $^
 
 mkfs.bpfs: mkfs.bpfs.o mkbpfs.o
-	$(CC) $(CFLAGS) $(LDFLAGS) -luuid -o $@ $^
+	$(CC) $(CFLAGS) -luuid -o $@ $^
