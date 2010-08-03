@@ -72,7 +72,6 @@
 - replace dcache bits for find_dirent() with persistent hashes in dirs?
 
 * current work
-- fix rename_clobber freeze
 - add benchmarks and measurement tools
 	- more benchmarks to contrast performance between bpfs and other fses?
 	- more macro/real-world benchmarks that involve durability
