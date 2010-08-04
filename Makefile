@@ -14,9 +14,9 @@ CFLAGS = -Wall -g
 BIN = bpfs mkfs.bpfs pwrite
 OBJS = bpfs.o crawler.o mkfs.bpfs.o mkbpfs.o dcache.o hash_map.o vector.o
 TAGS = tags TAGS
-SRCS = bpfs.c crawler.c mkfs.bpfs.c mkbpfs.c mkbpfs.h dcache.c dcache.h \
-       bpfs_structs.h util.h hash_map.c hash_map.h vector.c vector.h \
-       pool.h pwrite.c
+SRCS = bpfs_structs.h bpfs.h bpfs.c crawler.h crawler.c dcache.h dcache.c \
+       mkbpfs.h mkbpfs.c mkfs.bpfs.c \
+       util.h hash_map.h hash_map.c vector.h vector.c pool.h pwrite.c
 # Non-compile sources (at least, for this Makefile):
 NCSRCS = bench/bpramcount.cpp bench/microbench.py
 
@@ -32,13 +32,13 @@ TAGS: $(SRCS) $(NCSRCS)
 	@echo + ctags TAGS
 	@if ctags --version | grep -q Exuberant; then ctags -e $(SRCS) $(NCSRCS); else touch $@; fi
 
-bpfs.o: bpfs.c crawler.c mkbpfs.h bpfs_structs.h dcache.h util.h hash_map.h
+bpfs.o: bpfs.c bpfs_structs.h bpfs.h crawler.h mkbpfs.h dcache.h util.h hash_map.h
 	$(CC) $(CFLAGS) `pkg-config --cflags fuse` -c -o $@ $<
 
 mkfs.bpfs.o: mkfs.bpfs.c mkbpfs.h bpfs_structs.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-crawler.o: crawler.c crawler.h bpfs_structs.h util.h
+crawler.o: crawler.c crawler.h bpfs.h bpfs_structs.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 mkbpfs.o: mkbpfs.c mkbpfs.h bpfs_structs.h util.h
