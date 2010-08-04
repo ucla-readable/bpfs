@@ -31,14 +31,9 @@
 // - make time higher resolution. See ext4, bits/stat.h, linux/time.h.
 // - add gcc flag to warn about ignored return values?
 // - blockno can mean bpram block no or file block no
-// - enable writes >4096B?
 // - tell valgrind about block and inode alloc and free functions
 // - merge and breakup empty dirents
-// - remember that atomic 64b writes will only be atomic on 64b systems?
 // - don't reuse inflight resources? (work with epoch_barrier()?)
-// - change memcpy() calls to only do atomic writes if size is aligned
-// - change read/crawl code to return zero block for unallocated blocks?
-//   (ie because of a tree height increase)
 // - write fsck.bpfs?: check .., check nlinks, more?
 // - can compiler reorder memory writes? watch out for SP and SCSP.
 // - how much simpler would it be to always have a correct height tree?
