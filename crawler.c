@@ -118,13 +118,15 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 	uint64_t lastno = (off + size - 1) / child_max_nbytes;
 	uint64_t validno = (valid + child_max_nbytes - 1) / child_max_nbytes;
 	uint64_t in_hole = false;
+#if COMMIT_MODE == MODE_BPFS
 	bool only_invalid = off >= valid;
+#endif
 	enum commit child_commit;
 	uint64_t no;
 	int ret = 0;
 
 	switch (commit) {
-#if COW_OPT
+#if COMMIT_MODE == MODE_BPFS
 	case COMMIT_ATOMIC:
 		child_commit = (firstno == lastno || only_invalid)
 		               ? commit : COMMIT_COPY;
@@ -216,10 +218,10 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 			bool single = firstno == lastno || r == 1;
 			assert(commit != COMMIT_NONE);
 			if (prev_blockno == blockno
-			    && !(COW_OPT && ((commit == COMMIT_ATOMIC && single)
-			                     || !child_valid)))
+			    && !(COMMIT_MODE == MODE_BPFS
+			         && ((commit == COMMIT_ATOMIC && single) || !child_valid)))
 			{
-#if COW_OPT
+#if COMMIT_MODE == MODE_BPFS
 				// Could avoid the CoW in this case, but it should not occur:
 				assert(!(commit == COMMIT_ATOMIC && only_invalid));
 #endif
@@ -437,7 +439,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 			// FYI:
 			assert(!(!change_addr && overwrite && change_size));
 
-#if !SCSP_ENABLED
+#if COMMIT_MODE != MODE_BPFS
 			assert(blockno_refed || block_freshly_alloced(*prev_blockno));
 #endif
 
@@ -448,7 +450,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 			else
 			{
 				inplace = commit == COMMIT_FREE;
-#if COW_OPT
+#if COMMIT_MODE == MODE_BPFS
 				static_assert(COMMIT_ATOMIC != COMMIT_COPY);
 				inplace = inplace || commit == COMMIT_ATOMIC;
 #endif
@@ -664,7 +666,7 @@ static int callback_crawl_data_2(uint64_t blockoff, char *block,
 		}
 		else
 		{
-#ifndef NDEBUG
+#if COMMIT_MODE == MODE_BPFS && !defined(NDEBUG)
 			uint64_t prev_blockno = *blockno;
 #endif
 			struct bpfs_inode *inode_1;
@@ -680,7 +682,7 @@ static int callback_crawl_data_2(uint64_t blockoff, char *block,
 			inode_1 =  (struct bpfs_inode*)
 				(block + off + size - sizeof(struct bpfs_inode));
 
-#if SCSP_ENABLED
+#if COMMIT_MODE == MODE_BPFS
 			assert(prev_blockno != *blockno); // Required for !blockno_refed
 #endif
 			r = crawl_tree_ref(&inode_1->root, ccd2d->d[1].off,

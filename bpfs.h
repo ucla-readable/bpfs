@@ -7,16 +7,13 @@
 
 #include "bpfs_structs.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
+#define MODE_SP 1
+#define MODE_BPFS 2
 
-// Set to 0 to use shadow paging, 1 to use short-circuit shadow paging
-#define SCSP_ENABLED 1
-
-// Set to 1 to optimize away some COWs
-#define COW_OPT SCSP_ENABLED
-
-#define BPFS_EOF UINT64_MAX
+#define COMMIT_MODE MODE_BPFS
 
 // TODO: rephrase this as you-see-everything-p?
 // NOTE: this doesn't describe situations where the top block is already COWed
@@ -24,7 +21,7 @@
 enum commit {
 	COMMIT_NONE,   // no writes allowed
 	COMMIT_COPY,   // writes only to copies
-#if COW_OPT
+#if COMMIT_MODE == MODE_BPFS
 	COMMIT_ATOMIC, // write in-place if write is atomic; otherwise, copy
 #else
 	COMMIT_ATOMIC = COMMIT_COPY,
@@ -32,11 +29,16 @@ enum commit {
 	COMMIT_FREE,   // no restrictions on writes (e.g., region is not yet refed)
 };
 
+#define BPFS_EOF UINT64_MAX
 
 uint64_t cow_block(uint64_t old_blockno,
                    unsigned off, unsigned size, unsigned valid);
 uint64_t cow_block_hole(unsigned off, unsigned size, unsigned valid);
 uint64_t cow_block_entire(uint64_t old_blockno);
+
+#if COMMIT_MODE != MODE_BPFS
+bool block_freshly_alloced(uint64_t blockno);
+#endif
 
 uint64_t tree_max_nblocks(uint64_t height);
 uint64_t tree_height(uint64_t nblocks);

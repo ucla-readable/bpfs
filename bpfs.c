@@ -44,11 +44,11 @@
 // - how much simpler would it be to always have a correct height tree?
 // - passing size=1 to crawl(!COMMIT_NONE) forces extra writes
 
-#define DETECT_NONCOW_WRITES (!SCSP_ENABLED && !defined(NDEBUG))
+#define DETECT_NONCOW_WRITES (COMMIT_MODE != MODE_BPFS && !defined(NDEBUG))
 #define DETECT_ALLOCATION_DIFFS (!defined(NDEBUG))
 // Alternatives to valgrind until it knows about our block alloc functions:
 // FIXME: broken with SCSP at the moment
-#define DETECT_STRAY_ACCESSES (!SCSP_ENABLED && !defined(NDEBUG))
+#define DETECT_STRAY_ACCESSES (COMMIT_MODE != MODE_BPFS && !defined(NDEBUG))
 #define BLOCK_POISON (0 && !defined(NDEBUG))
 
 // STDTIMEOUT is not 0 because of a fuse kernel module bug.
@@ -515,8 +515,8 @@ static uint64_t alloc_block(void)
 	return no + 1;
 }
 
-#if !SCSP_ENABLED
-static bool block_freshly_alloced(uint64_t blockno)
+#if COMMIT_MODE != MODE_BPFS
+bool block_freshly_alloced(uint64_t blockno)
 {
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	return staged_list_freshly_alloced(block_alloc.bitmap.allocs, blockno - 1);
@@ -630,7 +630,7 @@ uint64_t cow_block(uint64_t old_blockno,
 	assert(off + size <= BPFS_BLOCK_SIZE);
 	assert(valid <= BPFS_BLOCK_SIZE);
 
-#if !SCSP_ENABLED
+#if COMMIT_MODE != MODE_BPFS
 	if (block_freshly_alloced(old_blockno))
 		return old_blockno;
 #endif
@@ -674,7 +674,7 @@ uint64_t cow_block_entire(uint64_t old_blockno)
 	char *old_block;
 	char *new_block;
 
-#if !SCSP_ENABLED
+#if COMMIT_MODE != MODE_BPFS
 	if (block_freshly_alloced(old_blockno))
 		return old_blockno;
 #endif
@@ -882,7 +882,7 @@ static uint64_t tree_nblocks(const struct bpfs_tree_root *root)
 	return nblocks;
 }
 
-#if !SCSP_ENABLED
+#if COMMIT_MODE != MODE_BPFS
 // Limit the define only because the function is otherwise not referenced
 static uint64_t bpram_blockno(const void *x)
 {
@@ -1284,7 +1284,7 @@ static int recover_superblock(void)
 	return 0;
 }
 
-#if !SCSP_ENABLED
+#if COMMIT_MODE != MODE_BPFS
 static struct bpfs_super *persistent_super;
 static struct bpfs_super staged_super;
 
@@ -1299,7 +1299,7 @@ static void revert_superblock(void)
 
 static void persist_superblock(void)
 {
-#if !SCSP_ENABLED && !defined(NDEBUG)
+#if COMMIT_MODE != MODE_BPFS && !defined(NDEBUG)
 	static bool first_run = 1;
 #endif
 	struct bpfs_super *persistent_super_2 = persistent_super + 1;
@@ -1316,7 +1316,7 @@ static void persist_superblock(void)
 	}
 # endif
 
-#if !SCSP_ENABLED && !defined(NDEBUG)
+#if COMMIT_MODE != MODE_BPFS && !defined(NDEBUG)
 	// Only compare supers after super2 has been created
 	if (first_run)
 		first_run = 0;
@@ -1422,7 +1422,7 @@ static void detect_allocation_diffs(void)
 
 static void bpfs_abort(void)
 {
-#if !SCSP_ENABLED
+#if COMMIT_MODE != MODE_BPFS
 	revert_superblock();
 #endif
 
@@ -1434,7 +1434,7 @@ static void bpfs_abort(void)
 
 static void bpfs_commit(void)
 {
-#if !SCSP_ENABLED
+#if COMMIT_MODE != MODE_BPFS
 	persist_superblock();
 #endif
 
@@ -1769,7 +1769,7 @@ static int callback_addrem_dirent(char *block, unsigned off,
 	               commit, dirent_callback, &cadd->ino, &new_blockno);
 	if (r < 0)
 		return r;
-#if SCSP_ENABLED
+#if COMMIT_MODE == MODE_BPFS
 	assert(*blockno == new_blockno);
 #endif
 
@@ -2070,7 +2070,7 @@ static int truncate_block_zero_leaf(uint64_t prev_blockno, uint64_t begin,
 	assert(begin < end);
 	assert(end <= BPFS_BLOCK_SIZE);
 
-#if !COW_OPT
+#if COMMIT_MODE != MODE_BPFS
 	if ((blockno = cow_block(blockno, begin, end - begin, begin)) == BPFS_BLOCKNO_INVALID)
 		return -ENOSPC;
 #endif
@@ -2101,7 +2101,7 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 	assert(begin < end);
 	assert(end <= BPFS_BLOCK_SIZE * max_nblocks);
 
-#if !COW_OPT
+#if COMMIT_MODE != MODE_BPFS
 	{
 		unsigned indir_valid = beginno * sizeof(*indir);
 		if ((blockno = cow_block(blockno, 0, 0, indir_valid)) == BPFS_BLOCKNO_INVALID)
@@ -2158,7 +2158,7 @@ int truncate_block_zero(struct bpfs_tree_root *root,
                         uint64_t *blockno)
 {
 	uint64_t new_blockno = *blockno;
-#if !COW_OPT
+#if COMMIT_MODE != MODE_BPFS
 	unsigned root_off = block_offset(root);
 #endif
 	uint64_t max_nblocks = tree_max_nblocks(root->ha.height);
@@ -2184,7 +2184,7 @@ int truncate_block_zero(struct bpfs_tree_root *root,
 	if (root->ha.addr == BPFS_BLOCKNO_INVALID)
 		return 0;
 
-#if !COW_OPT
+#if COMMIT_MODE != MODE_BPFS
 	new_blockno = cow_block_entire(*blockno);
 	if (new_blockno == BPFS_BLOCKNO_INVALID)
 		return -ENOSPC;
@@ -2247,7 +2247,7 @@ static int callback_setattr(char *block, unsigned off,
 	assert(commit != COMMIT_NONE);
 
 	if (!(commit == COMMIT_FREE
-	      || (COW_OPT
+	      || (COMMIT_MODE == MODE_BPFS
 	          && commit == COMMIT_ATOMIC
 	          && (count_bits(to_set & ~nonatomic) <= 1
 	              || to_set == (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID)))))
@@ -2729,7 +2729,7 @@ static void fuse_rename(fuse_req_t req,
 			goto abort;
 		dst_off = dst_sd.dirent_off;
 
-#if !SCSP_ENABLED
+#if COMMIT_MODE != MODE_BPFS
 		assert(block_freshly_alloced(bpram_blockno(dst_sd.dirent)));
 #else
 		// TODO: the assignment to dst_sd.dirent assumes that it is not
@@ -3219,9 +3219,9 @@ static int callback_write(uint64_t blockoff, char *block,
 
 	assert(commit != COMMIT_NONE);
 	if (!(commit == COMMIT_FREE
-	      || (COW_OPT &&
-	          (commit == COMMIT_ATOMIC
-	           && (can_atomic_write(off, size) || off >= valid)))))
+	      || (COMMIT_MODE == MODE_BPFS
+	          && (commit == COMMIT_ATOMIC
+	              && (can_atomic_write(off, size) || off >= valid)))))
 	{
 		uint64_t newno = cow_block(*new_blockno, off, size, valid);
 		if (newno == BPFS_BLOCKNO_INVALID)
@@ -3277,7 +3277,7 @@ static void fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 	{
 		struct bpfs_time time_now = BPFS_TIME_NOW();
 		r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_mtime, &time_now);
-#if SCSP_ENABLED
+#if COMMIT_MODE == MODE_BPFS
 		assert(r >= 0);
 #endif
 	}
@@ -3533,7 +3533,7 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-#if SCSP_ENABLED
+#if COMMIT_MODE == MODE_BPFS
 	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SCSP;
 #else
 	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SP;
@@ -3546,7 +3546,7 @@ int main(int argc, char **argv)
 
 	xcall(init_allocations(true));
 
-#if SCSP_ENABLED
+#if COMMIT_MODE == MODE_BPFS
 	// NOTE: could instead clear and set this field for each system call
 	bpfs_super[1].ephemeral_valid = bpfs_super->ephemeral_valid = 0;
 #endif
