@@ -72,7 +72,8 @@ static struct mdirent* mdirent_dup(const struct mdirent *md)
 static void* ino2key(uint64_t ino)
 {
 	void *key = (void*) ino;
-	assert(((uint64_t) key) == ino);
+	if (sizeof(key) < sizeof(ino))
+		xassert(((uint64_t) key) == ino);
 	return key;
 }
 
