@@ -349,8 +349,7 @@ static uint64_t bitmap_alloc(struct bitmap *bitmap)
 				if (!(*word & (((bitmap_scan_t) 1) << j)))
 				{
 					struct staged_entry *found = malloc(sizeof(*found));
-					if (!found)
-						return bitmap->ntotal;
+					xassert(found); // No way to return non-ENOSPC error
 					found->index = i + j;
 					found->next = bitmap->allocs;
 					bitmap->allocs = found;
