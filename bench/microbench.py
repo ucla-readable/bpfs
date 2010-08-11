@@ -368,7 +368,11 @@ class filesystem_bpfs:
                 return
         raise NameError('Unable to start BPFS')
     def unmount(self):
-        self.proc.terminate()
+        # 'fusermount -u' rather than self.proc.terminate() because the
+        # second does not always get its signal into the process.
+        # (In particular for benchmarks.rename_clober when running
+        # all benchmarks. This behavior seems to come and go.)
+        subprocess.check_call(['fusermount', '-u', self.mnt], close_fds=True)
         output = self.proc.communicate()[0]
         self.proc = None
         for line in output.splitlines():
