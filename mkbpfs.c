@@ -21,6 +21,16 @@
 	CMAX(1, ROUNDUP64(sizeof(bitmap_scan_t) * 8, BPFS_INODES_PER_BLOCK) \
 	        / BPFS_INODES_PER_BLOCK)
 
+/* As of commit max(commits of this comment), mkbpfs() allocates these blocks:
+ * 1: super
+ * 2: super2
+ * 3: inode root
+ * 4: ir.indirect
+ * 5: ir.data[0]
+ * 6: ir.data[1]
+ * 7: "/".data[0]
+ */
+
 static char* get_block(char *bpram, struct bpfs_super *super, uint64_t no)
 {
 	assert(no != BPFS_BLOCKNO_INVALID);
