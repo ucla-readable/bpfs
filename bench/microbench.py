@@ -103,6 +103,7 @@ class benchmarks:
         # TODO: could reduce dirent blocks by 2*8 and by unused
         # TODO: could reduce ino_roots by 2*8 and by unused
         #     inos + dirents + ino_roots+ ira + cmtime + rec_len + dirent
+        #                                (ira = root_inode addr)
         opt = 2*8  + 2*4096  + 4096+2*8 + 8   + 4*4    + 2       + 2+1+2+1
         def prepare(self):
             os.mkdir(os.path.join(self.mnt, 'a'))
@@ -319,7 +320,7 @@ class benchmarks:
             file.close()
 
     class read:
-        #     mtime
+        #     atime
         opt = 4
         def prepare(self):
             open(os.path.join(self.mnt, 'a'), 'w').close()
@@ -329,7 +330,7 @@ class benchmarks:
             file.close()
 
     class readdir:
-        #     mtime + mtime
+        #     atime + atime
         opt = 4     + 4
         def run(self):
             os.listdir(self.mnt)
