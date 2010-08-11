@@ -69,14 +69,6 @@ static struct mdirent* mdirent_dup(const struct mdirent *md)
 
 // mdirectory
 
-static void* ino2key(uint64_t ino)
-{
-	void *key = (void*) ino;
-	if (sizeof(key) < sizeof(ino))
-		xassert(((uint64_t) key) == ino);
-	return key;
-}
-
 static void mdirectory_touch(struct mdirectory *mdir)
 {
 	assert(dcache.lru_newest && dcache.lru_oldest);
@@ -103,7 +95,7 @@ static void mdirectory_rem(struct mdirectory *mdir)
 		mdirent_free(it.val);
 	hash_map_destroy(mdir->dirents);
 
-	hash_map_erase(dcache.directories, ino2key(mdir->ino));
+	hash_map_erase(dcache.directories, u64_ptr(mdir->ino));
 
 	// Remove mdir from the LRU
 	if (mdir->lru_newer)
@@ -145,7 +137,7 @@ static struct mdirectory* mdirectory_add(uint64_t ino)
 
 	mdir->ino = ino;
 
-	r = hash_map_insert(dcache.directories, ino2key(ino), mdir);
+	r = hash_map_insert(dcache.directories, u64_ptr(ino), mdir);
 	if (r < 0)
 		goto oom_dirents;
 
@@ -197,13 +189,13 @@ void dcache_destroy(void)
 
 bool dcache_has_dir(uint64_t ino)
 {
-	return !!hash_map_find_val(dcache.directories, ino2key(ino));
+	return !!hash_map_find_val(dcache.directories, u64_ptr(ino));
 }
 
 int dcache_add_dir(uint64_t ino)
 {
 	struct mdirectory *mdir;
-	assert(!hash_map_find_val(dcache.directories, ino2key(ino)));
+	assert(!hash_map_find_val(dcache.directories, u64_ptr(ino)));
 	mdir = mdirectory_add(ino);
 	if (!mdir)
 		return -ENOMEM;
@@ -213,7 +205,7 @@ int dcache_add_dir(uint64_t ino)
 void dcache_rem_dir(uint64_t ino)
 {
 	struct mdirectory *mdir = hash_map_find_val(dcache.directories,
-	                                            ino2key(ino));
+	                                            u64_ptr(ino));
 	assert(mdir);
 	mdirectory_rem(mdir);
 }
@@ -222,7 +214,7 @@ int dcache_add_dirent(uint64_t parent_ino, const char *name,
                       const struct mdirent *mdo)
 {
 	struct mdirectory *mdir = hash_map_find_val(dcache.directories,
-	                                            ino2key(parent_ino));
+	                                            u64_ptr(parent_ino));
 	struct mdirent *mdc;
 	int r;
 
@@ -247,7 +239,7 @@ int dcache_add_dirent(uint64_t parent_ino, const char *name,
 const struct mdirent* dcache_get_dirent(uint64_t parent_ino, const char *name)
 {
 	struct mdirectory *mdir = hash_map_find_val(dcache.directories,
-	                                            ino2key(parent_ino));
+	                                            u64_ptr(parent_ino));
 	assert(mdir);
 	mdirectory_touch(mdir);
 	return hash_map_find_val(mdir->dirents, name);
@@ -256,7 +248,7 @@ const struct mdirent* dcache_get_dirent(uint64_t parent_ino, const char *name)
 int dcache_rem_dirent(uint64_t parent_ino, const char *name)
 {
 	struct mdirectory *mdir = hash_map_find_val(dcache.directories,
-	                                            ino2key(parent_ino));
+	                                            u64_ptr(parent_ino));
 	struct mdirent *md;
 
 	assert(mdir);
@@ -275,7 +267,7 @@ int dcache_rem_dirent(uint64_t parent_ino, const char *name)
 int dcache_add_free(uint64_t parent_ino, uint64_t off, uint16_t rec_len)
 {
 	struct mdirectory *mdir = hash_map_find_val(dcache.directories,
-	                                            ino2key(parent_ino));
+	                                            u64_ptr(parent_ino));
 	struct mdirent_free *mdf;
 
 	assert(mdir);
@@ -295,7 +287,7 @@ int dcache_add_free(uint64_t parent_ino, uint64_t off, uint16_t rec_len)
 uint64_t dcache_take_free(uint64_t parent_ino, uint16_t min_rec_len)
 {
 	struct mdirectory *mdir = hash_map_find_val(dcache.directories,
-	                                            ino2key(parent_ino));
+	                                            u64_ptr(parent_ino));
 	struct mdirent_free *prev_mdf, *mdf;
 
 	assert(mdir);

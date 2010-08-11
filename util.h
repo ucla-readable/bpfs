@@ -93,6 +93,20 @@
 		(type *) (uintptr_t) ((const char *) __mptr - offsetof(type, member)); \
 	})
 
+// Reinterpret a uint64_t as a void* and perform an equality check if
+// these types are of different sizes
+static __inline
+void* u64_ptr(uint64_t x) __attribute__((always_inline));
+
+static __inline
+void* u64_ptr(uint64_t u)
+{
+	void *p = (void*) u;
+	if (sizeof(p) < sizeof(u))
+		xassert(((uint64_t) p) == u);
+	return p;
+}
+
 #define NBLOCKS_FOR_NBYTES(nbytes) \
 	(((nbytes) + BPFS_BLOCK_SIZE - 1) / BPFS_BLOCK_SIZE)
 
