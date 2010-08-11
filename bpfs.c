@@ -6,6 +6,7 @@
 #include "bpfs_structs.h"
 #include "dcache.h"
 #include "crawler.h"
+#include "indirect_cow.h"
 #include "util.h"
 #include "hash_map.h"
 
@@ -39,11 +40,12 @@
 // - how much simpler would it be to always have a correct height tree?
 // - passing size=1 to crawl(!COMMIT_NONE) forces extra writes
 
-#define DETECT_NONCOW_WRITES (COMMIT_MODE != MODE_BPFS && !defined(NDEBUG))
 #define DETECT_ALLOCATION_DIFFS (!defined(NDEBUG))
+#define DETECT_NONCOW_WRITES_SP (COMMIT_MODE == MODE_SP && !defined(NDEBUG))
+#define DETECT_NONCOW_WRITES_SCSP (COMMIT_MODE == MODE_SCSP && !defined(NDEBUG))
 // Alternatives to valgrind until it knows about our block alloc functions:
 // FIXME: broken with SCSP at the moment
-#define DETECT_STRAY_ACCESSES (COMMIT_MODE != MODE_BPFS && !defined(NDEBUG))
+#define DETECT_STRAY_ACCESSES (COMMIT_MODE == MODE_SP && !defined(NDEBUG))
 #define BLOCK_POISON (0 && !defined(NDEBUG))
 
 // STDTIMEOUT is not 0 because of a fuse kernel module bug.
@@ -55,9 +57,6 @@
 
 #define FUSE_ERR_SUCCESS 0
 #define FUSE_BIG_WRITES (FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8))
-
-// Max size that can be written atomically (hardcoded for unsafe 32b testing)
-#define ATOMIC_SIZE 8
 
 // Offset of the first persistent dirent. Offset 0 is "." and 1 is "..".
 #define DIRENT_FIRST_PERSISTENT_OFFSET 2
@@ -73,7 +72,14 @@
 # define Dprintf(x...) do {} while(0)
 #endif
 
-#if DETECT_NONCOW_WRITES
+#define DEBUG_BLOCKS (0 && !defined(NDEBUG))
+#if DEBUG_BLOCKS
+# define DBprintf(x...) fprintf(stderr, x)
+#else
+# define DBprintf(x...) do {} while(0)
+#endif
+
+#if DETECT_NONCOW_WRITES_SP
 # define PROT_INUSE_OLD PROT_READ
 #else
 # define PROT_INUSE_OLD (PROT_READ | PROT_WRITE)
@@ -100,6 +106,18 @@ static char *bpram;
 static size_t bpram_size;
 
 static struct bpfs_super *bpfs_super;
+
+void set_super(struct bpfs_super *super)
+{
+	assert(super->magic == BPFS_FS_MAGIC);
+	bpfs_super = super;
+}
+
+struct bpfs_super* get_bpram_super(void)
+{
+	static_assert(BPFS_BLOCKNO_INVALID == 0 && BPFS_BLOCKNO_SUPER == 1);
+	return (struct bpfs_super*) bpram;
+}
 
 struct bpfs_super* get_super(void)
 {
@@ -229,7 +247,7 @@ static void staged_list_free(struct staged_entry **head)
 	}
 }
 
-#ifndef NDEBUG
+#if (COMMIT_MODE != MODE_BPFS) || !defined(NDEBUG)
 static bool staged_list_freshly_alloced(struct staged_entry *head, uint64_t no)
 {
 	struct staged_entry *entry;
@@ -363,21 +381,6 @@ static uint64_t bitmap_alloc(struct bitmap *bitmap)
 	return bitmap->ntotal;
 }
 
-static void bitmap_free(struct bitmap *bitmap, uint64_t no)
-{
-	struct staged_entry *staged = malloc(sizeof(*staged));
-
-	assert(no < bitmap->ntotal);
-	assert(bitmap->bitmap[no / 8] & (1 << (no % 8)));
-	assert(!staged_list_freshly_alloced(bitmap->frees, no));
-
-	xassert(staged); // TODO/FIXME: recover
-
-	staged->index = no;
-	staged->next = bitmap->frees;
-	bitmap->frees = staged;
-}
-
 static void bitmap_set(struct bitmap *bitmap, uint64_t no)
 {
 	char *word = bitmap->bitmap + no / 8;
@@ -398,6 +401,45 @@ static bool bitmap_ensure_set(struct bitmap *bitmap, uint64_t no)
 	return was_set;
 }
 
+static void bitmap_free(struct bitmap *bitmap, uint64_t no)
+{
+	struct staged_entry *staged = malloc(sizeof(*staged));
+
+	assert(no < bitmap->ntotal);
+	assert(bitmap->bitmap[no / 8] & (1 << (no % 8)));
+	assert(!staged_list_freshly_alloced(bitmap->frees, no));
+
+	xassert(staged); // TODO/FIXME: recover
+
+	staged->index = no;
+	staged->next = bitmap->frees;
+	bitmap->frees = staged;
+}
+
+static void bitmap_unfree(struct bitmap *bitmap, uint64_t no)
+{
+	struct staged_entry *pstaged = NULL;
+	struct staged_entry *staged = bitmap->frees;
+	bool was_set;
+
+	assert(no < bitmap->ntotal);
+	assert(bitmap->bitmap[no / 8] & (1 << (no % 8)));
+
+	for (; staged; pstaged = staged, staged = staged->next)
+		if (no == staged->index)
+			break;
+	xassert(staged);
+
+	if (!pstaged)
+		bitmap->frees = staged->next;
+	else
+		pstaged->next = staged->next;
+	free(staged);
+
+	was_set = bitmap_ensure_set(bitmap, no);
+	assert(was_set);
+}
+
 static void bitmap_clear(struct bitmap *bitmap, uint64_t no)
 {
 	char *word = bitmap->bitmap + no / 8;
@@ -407,6 +449,28 @@ static void bitmap_clear(struct bitmap *bitmap, uint64_t no)
 
 	*word &= ~(1 << (no % 8));
 	bitmap->nfree++;
+}
+
+static void bitmap_unalloc(struct bitmap *bitmap, uint64_t no)
+{
+	struct staged_entry *pstaged = NULL;
+	struct staged_entry *staged = bitmap->allocs;
+
+	assert(no < bitmap->ntotal);
+	assert(bitmap->bitmap[no / 8] & (1 << (no % 8)));
+
+	for (; staged; pstaged = staged, staged = staged->next)
+		if (no == staged->index)
+			break;
+	xassert(staged);
+
+	if (!pstaged)
+		bitmap->allocs = staged->next;
+	else
+		pstaged->next = staged->next;
+	free(staged);
+
+	bitmap_clear(bitmap, no);
 }
 
 static void bitmap_abort(struct bitmap *bitmap)
@@ -496,17 +560,32 @@ static void poison_block(uint64_t blockno)
 static uint64_t alloc_block(void)
 {
 	uint64_t no = bitmap_alloc(&block_alloc.bitmap);
+	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, no + 1);
 	if (no == block_alloc.bitmap.ntotal)
 		return BPFS_BLOCKNO_INVALID;
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	assert(no + 1 >= BPFS_BLOCKNO_FIRST_ALLOC);
-#if (DETECT_STRAY_ACCESSES || DETECT_NONCOW_WRITES)
+#if (DETECT_STRAY_ACCESSES || DETECT_NONCOW_WRITES_SP || DETECT_NONCOW_WRITES_SCSP)
 	xsyscall(mprotect(get_block(no + 1), BPFS_BLOCK_SIZE, PROT_READ | PROT_WRITE));
 #endif
 #if BLOCK_POISON
 	poison_block(no + 1);
 #endif
 	return no + 1;
+}
+
+void unfree_block(uint64_t blockno)
+{
+	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, blockno);
+	assert(blockno != BPFS_BLOCKNO_INVALID);
+	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	bitmap_unfree(&block_alloc.bitmap, blockno - 1);
+#if (DETECT_STRAY_ACCESSES || DETECT_NONCOW_WRITES_SP)
+	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_READ | PROT_WRITE));
+#endif
+#if BLOCK_POISON
+	poison_block(blockno);
+#endif
 }
 
 #if COMMIT_MODE != MODE_BPFS
@@ -519,6 +598,7 @@ bool block_freshly_alloced(uint64_t blockno)
 
 static void set_block(uint64_t blockno)
 {
+	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, blockno);
 	assert(blockno != BPFS_BLOCKNO_INVALID);
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	bitmap_set(&block_alloc.bitmap, blockno - 1);
@@ -526,8 +606,15 @@ static void set_block(uint64_t blockno)
 
 static void free_block(uint64_t blockno)
 {
+	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, blockno);
 	assert(blockno != BPFS_BLOCKNO_INVALID);
+#if COMMIT_MODE != MODE_SCSP
 	assert(blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
+#else
+	// SCSP mode may temporarily free the super block
+	assert(blockno == BPFS_BLOCKNO_SUPER
+	       || blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
+#endif
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	bitmap_free(&block_alloc.bitmap, blockno - 1);
 #if DETECT_STRAY_ACCESSES
@@ -536,7 +623,26 @@ static void free_block(uint64_t blockno)
 # if BLOCK_POISON
 	poison_block(blockno);
 # endif
-# if DETECT_NONCOW_WRITES
+# if DETECT_NONCOW_WRITES_SP
+	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_READ));
+# endif
+#endif
+}
+
+void unalloc_block(uint64_t blockno)
+{
+	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, blockno);
+	assert(blockno != BPFS_BLOCKNO_INVALID);
+	assert(blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
+	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	bitmap_unalloc(&block_alloc.bitmap, blockno - 1);
+#if DETECT_STRAY_ACCESSES
+	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_NONE));
+#else
+# if BLOCK_POISON
+	poison_block(blockno);
+# endif
+# if DETECT_NONCOW_WRITES_SP
 	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_READ));
 # endif
 #endif
@@ -552,14 +658,14 @@ static void protect_bpram_abort(void)
 	for (cur = block_alloc.bitmap.allocs; cur; cur = cur->next)
 		xsyscall(mprotect(bpram + cur->index * BPFS_BLOCK_SIZE,
 		                  BPFS_BLOCK_SIZE, PROT_NONE));
-#elif DETECT_NONCOW_WRITES
+#elif DETECT_NONCOW_WRITES_SP
 	xsyscall(mprotect(bpram, bpram_size, PROT_READ));
 #endif
 }
 
 static void protect_bpram_commit(void)
 {
-#if DETECT_NONCOW_WRITES
+#if DETECT_NONCOW_WRITES_SP
 # if DETECT_STRAY_ACCESSES
 	struct staged_entry *cur;
 	for (cur = block_alloc.bitmap.allocs; cur; cur = cur->next)
@@ -585,6 +691,10 @@ static void commit_blocks(void)
 
 char* get_block(uint64_t blockno)
 {
+#if INDIRECT_COW
+	char *block;
+#endif
+
 	if (blockno == BPFS_BLOCKNO_INVALID)
 	{
 		assert(0);
@@ -596,6 +706,14 @@ char* get_block(uint64_t blockno)
 		assert(0);
 		return NULL;
 	}
+
+#if INDIRECT_COW
+	if ((block = indirect_cow_block_get(blockno)))
+	{
+		assert(!block_offset(block));
+		return block;
+	}
+#endif
 	return bpram + (blockno - 1) * BPFS_BLOCK_SIZE;
 }
 
@@ -619,6 +737,7 @@ uint64_t cow_block(uint64_t old_blockno,
 	uint64_t new_blockno;
 	char *old_block;
 	char *new_block;
+	int r;
 	uint64_t end = off + size;
 
 	assert(off + size <= BPFS_BLOCK_SIZE);
@@ -632,6 +751,16 @@ uint64_t cow_block(uint64_t old_blockno,
 	new_blockno = alloc_block();
 	if (new_blockno == BPFS_BLOCKNO_INVALID)
 		return BPFS_BLOCKNO_INVALID;
+#if DETECT_NONCOW_WRITES_SCSP
+	xsyscall(mprotect(get_block(new_blockno), BPFS_BLOCK_SIZE, PROT_READ));
+#endif
+	r = indirect_cow_block_cow(old_blockno, new_blockno);
+	if (r < 0)
+	{
+		unalloc_block(new_blockno);
+		set_block(old_blockno);
+		return BPFS_BLOCKNO_INVALID;
+	}
 
 	old_block = get_block(old_blockno);
 	new_block = get_block(new_blockno);
@@ -654,6 +783,7 @@ uint64_t cow_block_hole(unsigned off, unsigned size, unsigned valid)
 	blockno = alloc_block();
 	if (blockno == BPFS_BLOCKNO_INVALID)
 		return BPFS_BLOCKNO_INVALID;
+	// DETECT_NONCOW_WRITES_SCSP: do not mark read-only; no dram copy
 
 	block = get_block(blockno);
 	memset(block, 0, off);
@@ -667,6 +797,7 @@ uint64_t cow_block_entire(uint64_t old_blockno)
 	uint64_t new_blockno;
 	char *old_block;
 	char *new_block;
+	int r;
 
 #if COMMIT_MODE != MODE_BPFS
 	if (block_freshly_alloced(old_blockno))
@@ -676,6 +807,16 @@ uint64_t cow_block_entire(uint64_t old_blockno)
 	new_blockno = alloc_block();
 	if (new_blockno == BPFS_BLOCKNO_INVALID)
 		return BPFS_BLOCKNO_INVALID;
+#if DETECT_NONCOW_WRITES_SCSP
+	xsyscall(mprotect(get_block(new_blockno), BPFS_BLOCK_SIZE, PROT_READ));
+#endif
+	r = indirect_cow_block_cow(old_blockno, new_blockno);
+	if (r < 0)
+	{
+		unalloc_block(new_blockno);
+		set_block(old_blockno);
+		return BPFS_BLOCKNO_INVALID;
+	}
 
 	old_block = get_block(old_blockno);
 	new_block = get_block(new_blockno);
@@ -876,7 +1017,7 @@ static uint64_t tree_nblocks(const struct bpfs_tree_root *root)
 	return nblocks;
 }
 
-#if COMMIT_MODE != MODE_BPFS
+#if (COMMIT_MODE == MODE_SP) && !defined(NDEBUG)
 // Limit the define only because the function is otherwise not referenced
 static uint64_t bpram_blockno(const void *x)
 {
@@ -1033,6 +1174,7 @@ int tree_change_height(struct bpfs_tree_root *root,
 		uint64_t new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		root = (struct bpfs_tree_root*) (get_block(new_blockno) + root_off);
 		*blockno = new_blockno;
 	}
@@ -1278,7 +1420,7 @@ static int recover_superblock(void)
 	return 0;
 }
 
-#if COMMIT_MODE != MODE_BPFS
+#if COMMIT_MODE == MODE_SP
 static struct bpfs_super *persistent_super;
 static struct bpfs_super staged_super;
 
@@ -1293,9 +1435,9 @@ static void revert_superblock(void)
 
 static void persist_superblock(void)
 {
-#if COMMIT_MODE != MODE_BPFS && !defined(NDEBUG)
+# ifndef NDEBUG
 	static bool first_run = 1;
-#endif
+# endif
 	struct bpfs_super *persistent_super_2 = persistent_super + 1;
 
 	assert(bpfs_super == &staged_super);
@@ -1303,23 +1445,25 @@ static void persist_superblock(void)
 	if (!memcmp(persistent_super, &staged_super, sizeof(staged_super)))
 		return; // update unnecessary
 
-# if DETECT_NONCOW_WRITES
+# if DETECT_NONCOW_WRITES_SP
 	{
 		size_t len = BPFS_BLOCK_SIZE * 2; /* two super blocks */
+		static_assert(BPFS_BLOCKNO_INVALID == 0
+		              && BPFS_BLOCKNO_SUPER == 1 && BPFS_BLOCKNO_SUPER_2 == 2);
 		xsyscall(mprotect(bpram, len, PROT_READ | PROT_WRITE));
 	}
 # endif
 
-#if COMMIT_MODE != MODE_BPFS && !defined(NDEBUG)
+# ifndef NDEBUG
 	// Only compare supers after super2 has been created
 	if (first_run)
 		first_run = 0;
 	else
 		assert(!memcmp(persistent_super, persistent_super_2,
 		       sizeof(staged_super)));
-#endif
+# endif
 
-	staged_super.inode_root_addr_2        = staged_super.inode_root_addr;
+	staged_super.inode_root_addr_2 = staged_super.inode_root_addr;
 
 	// persist the inode_root_addr{,_2} fields, but do so by copying
 	// all because !SCSP and to copy the ephemeral_valid field:
@@ -1327,12 +1471,44 @@ static void persist_superblock(void)
 	epoch_barrier(); // keep at least one SB consistent during each update
 	memcpy(persistent_super_2, &staged_super, sizeof(staged_super));
 
-# if DETECT_NONCOW_WRITES
+# if DETECT_NONCOW_WRITES_SP
 	{
 		size_t len = BPFS_BLOCK_SIZE * 2; /* two super blocks */
+		static_assert(BPFS_BLOCKNO_INVALID == 0
+		              && BPFS_BLOCKNO_SUPER == 1 && BPFS_BLOCKNO_SUPER_2 == 2);
 		xsyscall(mprotect(bpram, len, PROT_READ));
 	}
 # endif
+}
+#elif COMMIT_MODE == MODE_SCSP
+static void reset_indirect_cow_superblock(void)
+{
+	uint64_t new_blockno;
+
+	assert(!indirect_cow_block_get(BPFS_BLOCKNO_SUPER));
+	new_blockno = cow_block_entire(BPFS_BLOCKNO_SUPER);
+	xassert(new_blockno != BPFS_BLOCKNO_INVALID);
+
+	set_super((struct bpfs_super*) get_block(new_blockno));
+}
+
+static void revert_superblock(void)
+{
+#if DETECT_NONCOW_WRITES_SCSP
+	xsyscall(mprotect(bpram, bpram_size, PROT_READ));
+#endif
+	indirect_cow_abort();
+}
+
+static void persist_superblock(void)
+{
+#if DETECT_NONCOW_WRITES_SCSP
+	xsyscall(mprotect(bpram, bpram_size, PROT_READ | PROT_WRITE));
+#endif
+	indirect_cow_commit();
+#if DETECT_NONCOW_WRITES_SCSP
+	xsyscall(mprotect(bpram, bpram_size, PROT_READ));
+#endif
 }
 #endif
 
@@ -1424,6 +1600,10 @@ static void bpfs_abort(void)
 	abort_inodes();
 
 	detect_allocation_diffs();
+
+#if COMMIT_MODE == MODE_SCSP
+	reset_indirect_cow_superblock();
+#endif
 }
 
 static void bpfs_commit(void)
@@ -1436,6 +1616,10 @@ static void bpfs_commit(void)
 	commit_inodes();
 
 	detect_allocation_diffs();
+
+#if COMMIT_MODE == MODE_SCSP
+	reset_indirect_cow_superblock();
+#endif
 }
 
 
@@ -1566,6 +1750,7 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 		assert(COMMIT_COPY == COMMIT_ATOMIC);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 		dirent = (struct bpfs_dirent*) (block + off);
 		*blockno = new_blockno;
@@ -1682,6 +1867,7 @@ static int callback_set_dirent_ino(uint64_t blockoff, char *block,
 		uint64_t new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 		*blockno = new_blockno;
 	}
@@ -1708,6 +1894,7 @@ static int callback_clear_dirent_ino(uint64_t blockoff, char *block,
 		uint64_t new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 		*blockno = new_blockno;
 	}
@@ -1745,6 +1932,7 @@ static int callback_addrem_dirent(char *block, unsigned off,
 		new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
 	inode = (struct bpfs_inode*) (block + off);
@@ -1790,6 +1978,7 @@ static int callback_init_inode(char *block, unsigned off,
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
 	inode = (struct bpfs_inode*) (block + off);
@@ -1826,6 +2015,7 @@ static int callback_set_cmtime(char *block, unsigned off,
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
 	inode = (struct bpfs_inode*) (block + off);
@@ -2067,6 +2257,7 @@ static int truncate_block_zero_leaf(uint64_t prev_blockno, uint64_t begin,
 #if COMMIT_MODE != MODE_BPFS
 	if ((blockno = cow_block(blockno, begin, end - begin, begin)) == BPFS_BLOCKNO_INVALID)
 		return -ENOSPC;
+	indirect_cow_block_required(blockno);
 #endif
 	block = get_block(blockno);
 
@@ -2100,6 +2291,7 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 		unsigned indir_valid = beginno * sizeof(*indir);
 		if ((blockno = cow_block(blockno, 0, 0, indir_valid)) == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(blockno);
 		indir = (struct bpfs_indir_block*) get_block(blockno);
 	}
 #endif
@@ -2182,6 +2374,7 @@ int truncate_block_zero(struct bpfs_tree_root *root,
 	new_blockno = cow_block_entire(*blockno);
 	if (new_blockno == BPFS_BLOCKNO_INVALID)
 		return -ENOSPC;
+	indirect_cow_block_required(new_blockno);
 	root = (struct bpfs_tree_root*) (get_block(new_blockno) + root_off);
 #endif
 
@@ -2249,6 +2442,7 @@ static int callback_setattr(char *block, unsigned off,
 		new_blockno = cow_block_entire(*blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
 	inode = (struct bpfs_inode*) (block + off);
@@ -2461,6 +2655,7 @@ static int callback_set_ctime(char *block, unsigned off,
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
 	inode = (struct bpfs_inode*) (block + off);
@@ -2488,6 +2683,7 @@ static int callback_change_nlinks(char *block, unsigned off,
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
 	inode = (struct bpfs_inode*) (block + off);
@@ -2723,7 +2919,8 @@ static void fuse_rename(fuse_req_t req,
 			goto abort;
 		dst_off = dst_sd.dirent_off;
 
-#if COMMIT_MODE != MODE_BPFS
+// TODO: enable check for MODE_SCSP (need bpram_blockno() support):
+#if COMMIT_MODE == MODE_SP
 		assert(block_freshly_alloced(bpram_blockno(dst_sd.dirent)));
 #else
 		// TODO: the assignment to dst_sd.dirent assumes that it is not
@@ -2969,6 +3166,7 @@ static int callback_set_atime(char *block, unsigned off,
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
 	inode = (struct bpfs_inode*) (block + off);
@@ -3220,6 +3418,7 @@ static int callback_write(uint64_t blockoff, char *block,
 		uint64_t newno = cow_block(*new_blockno, off, size, valid);
 		if (newno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(newno);
 		*new_blockno = newno;
 		block = get_block(newno);
 	}
@@ -3244,6 +3443,7 @@ static int callback_set_mtime(char *block, unsigned off,
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
+		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
 	inode = (struct bpfs_inode*) (block + off);
@@ -3502,7 +3702,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	bpfs_super = (struct bpfs_super*) bpram;
+	set_super(get_bpram_super());
 
 	if (bpfs_super->magic != BPFS_FS_MAGIC)
 	{
@@ -3527,16 +3727,20 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-#if COMMIT_MODE == MODE_BPFS
-	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SCSP;
-#else
+#if COMMIT_MODE == MODE_SP
 	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SP;
 	persistent_super = bpfs_super;
 	staged_super = *bpfs_super;
-	bpfs_super = &staged_super;
+	set_super(&staged_super);
+#else
+	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SCSP;
 #endif
 
 	crawler_init();
+
+#if INDIRECT_COW
+	xcall(indirect_cow_init());
+#endif
 
 	xcall(init_allocations(true));
 
@@ -3545,7 +3749,15 @@ int main(int argc, char **argv)
 	bpfs_super[1].ephemeral_valid = bpfs_super->ephemeral_valid = 0;
 #endif
 
+# if COMMIT_MODE == MODE_SCSP
+	reset_indirect_cow_superblock();
+# endif
+
 	inform_pin_of_bpram(bpram, bpram_size);
+
+#if DETECT_NONCOW_WRITES_SCSP
+	xsyscall(mprotect(bpram, bpram_size, PROT_READ));
+#endif
 
 #if DETECT_STRAY_ACCESSES
 	xsyscall(mprotect(bpram, bpram_size, PROT_NONE));
@@ -3563,6 +3775,9 @@ int main(int argc, char **argv)
 	{
 #if BLOCK_POISON
 		printf("Not enabling random fsck: BLOCK_POISON is enabled.\n");
+#elif COMMIT_MODE == MODE_SCSP
+		// There are periods when bpfs_super does not agree with the bitmaps
+		printf("Not enabling random fsck: MODE_SCSP is enabled.\n");
 #else
 		struct itimerval itv;
 
@@ -3660,6 +3875,9 @@ int main(int argc, char **argv)
 
 	dcache_destroy();
 	destroy_allocations();
+#if INDIRECT_COW
+	indirect_cow_destroy();
+#endif
 	destroy_bpram();
 
 	return r;

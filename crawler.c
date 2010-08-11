@@ -4,6 +4,7 @@
 
 #include "crawler.h"
 #include "bpfs.h"
+#include "indirect_cow.h"
 #include "util.h"
 
 #include <sys/mman.h>
@@ -149,6 +150,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		blockno = cow_block_hole(firstno * sizeof(indir->addr[0]),
 		                         (lastno + 1 - firstno) * sizeof(indir->addr[0]),
 		                         validno * sizeof(indir->addr[0]));
+		// indirect_cow_block_required(blockno) not required
 		if (blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 		in_hole = true;
@@ -199,6 +201,8 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		else
 			child_blockno = child_new_blockno = indir->addr[no];
 
+		if (commit != COMMIT_NONE)
+			xcall(indirect_cow_parent_push(blockno));
 		if (height == 1)
 			r = crawl_leaf(child_blockno, child_blockoff,
 			               child_off, child_size, child_valid,
@@ -211,6 +215,8 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 			                height - 1, child_max_nblocks,
 			                callback, user, bcallback,
 			                &child_new_blockno);
+		if (commit != COMMIT_NONE)
+			indirect_cow_parent_pop(blockno);
 		if (r < 0)
 			return r;
 		if (child_blockno != child_new_blockno || in_hole)
@@ -229,6 +235,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 				if ((blockno = cow_block_entire(blockno))
 				    == BPFS_BLOCKNO_INVALID)
 					return -ENOSPC;
+				// indirect_cow_block_required(blockno) not required
 				indir = (struct bpfs_indir_block*) get_block(blockno);
 			}
 			indir->addr[no] = child_new_blockno;
@@ -399,6 +406,8 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 	else
 		child_commit = commit;
 
+	if (commit != COMMIT_NONE)
+		xcall(indirect_cow_parent_push(new_blockno));
 	if (!root->ha.height)
 	{
 		if (child_size)
@@ -416,6 +425,8 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
                         off, child_commit, root->ha.height, max_nblocks,
 		                callback, user, NULL, &child_new_blockno);
 	}
+	if (commit != COMMIT_NONE)
+		indirect_cow_parent_pop(new_blockno);
 
 	if (r >= 0)
 	{
@@ -461,6 +472,9 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 				new_blockno = cow_block_entire(new_blockno);
 				if (new_blockno == BPFS_BLOCKNO_INVALID)
 					return -ENOSPC;
+				if (change_size)
+					indirect_cow_block_required(new_blockno);
+				// else indirect_cow_block_required(new_blockno) not required
 				root = (struct bpfs_tree_root*)
 				           (get_block(new_blockno) + root_off);
 			}
@@ -498,17 +512,28 @@ int crawl_inodes(uint64_t off, uint64_t size, enum commit commit,
 {
 	struct bpfs_tree_root *root = get_inode_root();
 	struct bpfs_super *super = get_super();
+	uint64_t super_blockno = get_super_blockno();
 	uint64_t child_blockno = super->inode_root_addr;
 	int r;
 
+	if (commit != COMMIT_NONE)
+		xcall(indirect_cow_parent_push(super_blockno));
 	r = crawl_tree(root, off, size, commit, callback, user,
 	               &child_blockno);
+	if (commit != COMMIT_NONE)
+		indirect_cow_parent_pop(super_blockno);
 
 	if (r >= 0 && child_blockno != super->inode_root_addr)
 	{
-		// FIXME: callers should not pass COMMIT_COPY.
-		// assert(commit == COMMIT_ATOMIC);
+#if COMMIT_MODE == BPFS
+		assert(commit == COMMIT_ATOMIC);
+#else
+		// COPY is ok because super points at a non-persistent block
 		assert(commit == COMMIT_COPY || commit == COMMIT_ATOMIC);
+#endif
+#if COMMIT_MODE == MODE_SCSP
+		assert(super_blockno != BPFS_BLOCKNO_SUPER);
+#endif
 		super->inode_root_addr = child_blockno;
 	}
 

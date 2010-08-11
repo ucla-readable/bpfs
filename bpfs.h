@@ -11,9 +11,12 @@
 #include <stdint.h>
 
 #define MODE_SP 1
-#define MODE_BPFS 2
+#define MODE_SCSP 2
+#define MODE_BPFS 3
 
 #define COMMIT_MODE MODE_BPFS
+
+#define INDIRECT_COW (COMMIT_MODE == MODE_SCSP)
 
 // TODO: rephrase this as you-see-everything-p?
 // NOTE: this doesn't describe situations where the top block is already COWed
@@ -28,6 +31,9 @@ enum commit {
 #endif
 	COMMIT_FREE,   // no restrictions on writes (e.g., region is not yet refed)
 };
+
+// Max size that can be written atomically (hardcoded for unsafe 32b testing)
+#define ATOMIC_SIZE 8
 
 #define BPFS_EOF UINT64_MAX
 
@@ -46,11 +52,18 @@ int tree_change_height(struct bpfs_tree_root *root,
                        unsigned new_height,
                        enum commit commit, uint64_t *blockno);
 
+void set_super(struct bpfs_super *super);
+struct bpfs_super*  get_bpram_super(void);
 struct bpfs_super* get_super(void);
+#if COMMIT_MODE == MODE_SCSP
+uint64_t get_super_blockno(void);
+#endif
 
 char* get_block(uint64_t blockno);
 static __inline
 unsigned block_offset(const void *x) __attribute__((always_inline));
+void unfree_block(uint64_t blockno);
+void unalloc_block(uint64_t blockno);
 
 struct bpfs_tree_root* get_inode_root(void);
 int get_inode_offset(uint64_t ino, uint64_t *poffset);
