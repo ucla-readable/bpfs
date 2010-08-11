@@ -337,7 +337,7 @@ class benchmarks:
 
 
 class filesystem_bpfs:
-    _mount_overhead = 1 # the valid field
+    _mount_overheads = { 'BPFS': 1 } # the valid field
     def __init__(self, megabytes):
         self.img = tempfile.NamedTemporaryFile()
         # NOTE: self.mnt should not be in ~/ so that gvfs does not readdir it
@@ -364,7 +364,8 @@ class filesystem_bpfs:
                                       env=env)
         while self.proc.stdout:
             line = self.proc.stdout.readline()
-            if line == 'BPFS running\n':
+            if line.startswith('BPFS running'):
+                self._commit_mode = line.split()[3]
                 return
         raise NameError('Unable to start BPFS')
     def unmount(self):
@@ -377,7 +378,10 @@ class filesystem_bpfs:
         self.proc = None
         for line in output.splitlines():
             if line.startswith('pin: ') and line.endswith(' bytes written to BPRAM'):
-                return int(line.split()[1]) - self._mount_overhead
+                bytes_written = int(line.split()[1])
+                if self._commit_mode in self._mount_overheads:
+                    bytes_written -= self._mount_overheads[self._commit_mode]
+                return bytes_written
         raise NameError('BPFS failed to exit correctly')
 
 class filesystem_kernel:

@@ -2126,9 +2126,17 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 
 static void fuse_init(void *userdata, struct fuse_conn_info *conn)
 {
+	const char *mode;
 	static_assert(FUSE_ROOT_ID == BPFS_INO_ROOT);
 	Dprintf("%s()\n", __FUNCTION__);
-	printf("BPFS running\n");
+	switch (COMMIT_MODE)
+	{
+		case MODE_SP:   mode = "SP";   break;
+		case MODE_SCSP: mode = "SCSP"; break;
+		case MODE_BPFS: mode = "BPFS"; break;
+		default: assert(0); mode = NULL;
+	}
+	printf("BPFS running in %s mode\n", mode);
 	fflush(stdout);
 	bpfs_commit();
 }
