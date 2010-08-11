@@ -445,9 +445,12 @@ def run(fs, benches, profile):
         sys.stdout.write(str(bytes) + ' bytes')
         if hasattr(b, 'opt'):
             delta = bytes - b.opt
-            sys.stdout.write(' (' + str(delta))
+            delta = '%+d' % delta
+            sys.stdout.write(' (' + delta + ' bytes')
             if b.opt:
-                sys.stdout.write(' = ' + str(100 * delta / b.opt) + '%')
+                factor = float(delta) / float(b.opt)
+                factor = '%+.2f' % factor
+                sys.stdout.write(' = ' + factor + 'x')
             sys.stdout.write(')')
         print ''
         if profile:
