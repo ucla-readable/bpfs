@@ -21,6 +21,8 @@
 // Write [acm]time independently of the commit
 #define SCSP_OPT_TIME (1 && COMMIT_MODE == MODE_SCSP)
 
+#define APPEASE_VALGRIND 0
+
 #define SCSP_OPT_DIRECT (SCSP_OPT_APPEND || SCSP_OPT_TIME)
 #define INDIRECT_COW (COMMIT_MODE == MODE_SCSP)
 

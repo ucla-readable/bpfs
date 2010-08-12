@@ -880,7 +880,7 @@ static int callback_init_inodes(uint64_t blockoff, char *block,
                                 uint64_t crawl_start, enum commit commit,
                                 void *user, uint64_t *blockno)
 {
-#ifndef NDEBUG
+#if APPEASE_VALGRIND
 	// init the generation field. not required, but appeases valgrind.
 	assert(!(off % sizeof(struct bpfs_inode)));
 	for (; off + sizeof(struct bpfs_inode) <= size; off += sizeof(struct bpfs_inode))
