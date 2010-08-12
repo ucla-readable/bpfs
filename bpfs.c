@@ -2264,7 +2264,8 @@ static int truncate_block_zero_leaf(uint64_t prev_blockno, uint64_t begin,
 	assert(end <= BPFS_BLOCK_SIZE);
 
 #if COMMIT_MODE != MODE_BPFS
-	if ((blockno = cow_block(blockno, begin, end - begin, begin)) == BPFS_BLOCKNO_INVALID)
+	blockno = cow_block(blockno, begin, end - begin, begin);
+	if (blockno == BPFS_BLOCKNO_INVALID)
 		return -ENOSPC;
 	indirect_cow_block_required(blockno);
 #endif
