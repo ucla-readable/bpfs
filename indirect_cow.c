@@ -291,9 +291,10 @@ void indirect_cow_block_required(uint64_t blkno)
 {
 	struct block *block = hash_map_find_val(blkno_map_cow, u64_ptr(blkno));
 	Dprintf("%s(blkno = %" PRIu64 ")\n", __FUNCTION__, blkno);
-	// !block is expected exactly when the block is new (not CoWed)
 	if (block)
 		block->required = true;
+	else
+		assert(block_freshly_alloced(blkno));
 }
 
 
