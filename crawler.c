@@ -119,9 +119,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 	uint64_t lastno = (off + size - 1) / child_max_nbytes;
 	uint64_t validno = (valid + child_max_nbytes - 1) / child_max_nbytes;
 	uint64_t in_hole = false;
-#if COMMIT_MODE == MODE_BPFS
 	bool only_invalid = off >= valid;
-#endif
 	enum commit child_commit;
 	uint64_t no;
 	int ret = 0;
@@ -223,9 +221,11 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 		{
 			bool single = firstno == lastno || r == 1;
 			assert(commit != COMMIT_NONE);
-			if (prev_blockno == blockno
-			    && !(COMMIT_MODE == MODE_BPFS
-			         && ((commit == COMMIT_ATOMIC && single) || !child_valid)))
+			if (!(prev_blockno != blockno
+			      || (SCSP_OPT_APPEND && only_invalid)
+			      || (COMMIT_MODE == MODE_BPFS
+			          && ((commit == COMMIT_ATOMIC && single)
+			              || !child_valid))))
 			{
 #if COMMIT_MODE == MODE_BPFS
 				// Could avoid the CoW in this case, but it should not occur:
