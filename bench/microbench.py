@@ -181,6 +181,18 @@ class benchmarks:
             file.write('0' * 4096)
             file.close()
 
+    class append_8k_4k:
+        #     data + root + size + mtime
+        opt = 4096 + 8    + 8    + 4
+        def prepare(self):
+            file = open(os.path.join(self.mnt, 'a'), 'w')
+            file.write('0' * (8 * 1024))
+            file.close()
+        def run(self):
+            file = open(os.path.join(self.mnt, 'a'), 'a')
+            file.write('0' * 4096)
+            file.close()
+
     # 128kiB is the largest that FUSE will atomically write
     class append_0B_128k:
         # TODO: changing height separately from root is needless
