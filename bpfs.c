@@ -42,7 +42,8 @@
 
 #define DETECT_ALLOCATION_DIFFS (!defined(NDEBUG))
 #define DETECT_NONCOW_WRITES_SP (COMMIT_MODE == MODE_SP && !defined(NDEBUG))
-#define DETECT_NONCOW_WRITES_SCSP (COMMIT_MODE == MODE_SCSP && !defined(NDEBUG))
+#define DETECT_NONCOW_WRITES_SCSP \
+	(COMMIT_MODE == MODE_SCSP && !SCSP_OPT_APPEND && !defined(NDEBUG))
 // Alternatives to valgrind until it knows about our block alloc functions:
 // FIXME: broken with SCSP at the moment
 #define DETECT_STRAY_ACCESSES (COMMIT_MODE == MODE_SP && !defined(NDEBUG))
@@ -608,12 +609,12 @@ static void free_block(uint64_t blockno)
 {
 	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, blockno);
 	assert(blockno != BPFS_BLOCKNO_INVALID);
-#if COMMIT_MODE != MODE_SCSP
-	assert(blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
-#else
-	// SCSP mode may temporarily free the super block
+#if INDIRECT_COW
+	// indirect_cow may temporarily free the super block
 	assert(blockno == BPFS_BLOCKNO_SUPER
 	       || blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
+#else
+	assert(blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
 #endif
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
 	bitmap_free(&block_alloc.bitmap, blockno - 1);
@@ -1601,7 +1602,7 @@ static void bpfs_abort(void)
 
 	detect_allocation_diffs();
 
-#if COMMIT_MODE == MODE_SCSP
+#if INDIRECT_COW
 	reset_indirect_cow_superblock();
 #endif
 }
@@ -3419,9 +3420,11 @@ static int callback_write(uint64_t blockoff, char *block,
 
 	assert(commit != COMMIT_NONE);
 	if (!(commit == COMMIT_FREE
+	      || (SCSP_OPT_APPEND && off >= valid)
 	      || (COMMIT_MODE == MODE_BPFS
 	          && (commit == COMMIT_ATOMIC
 	              && (can_atomic_write(off, size) || off >= valid)))))
+
 	{
 		uint64_t newno = cow_block(*new_blockno, off, size, valid);
 		if (newno == BPFS_BLOCKNO_INVALID)
@@ -3783,9 +3786,9 @@ int main(int argc, char **argv)
 	{
 #if BLOCK_POISON
 		printf("Not enabling random fsck: BLOCK_POISON is enabled.\n");
-#elif COMMIT_MODE == MODE_SCSP
+#elif INDIRECT_COW
 		// There are periods when bpfs_super does not agree with the bitmaps
-		printf("Not enabling random fsck: MODE_SCSP is enabled.\n");
+		printf("Not enabling random fsck: INDIRECT_COW is enabled.\n");
 #else
 		struct itimerval itv;
 

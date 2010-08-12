@@ -16,6 +16,9 @@
 
 #define COMMIT_MODE MODE_BPFS
 
+// Allow in-place append writes
+#define SCSP_OPT_APPEND (1 && COMMIT_MODE == MODE_SCSP)
+
 #define INDIRECT_COW (COMMIT_MODE == MODE_SCSP)
 
 // TODO: rephrase this as you-see-everything-p?
