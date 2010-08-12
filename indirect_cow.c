@@ -386,8 +386,14 @@ void indirect_cow_commit(void)
 	while (1)
 	{
 		struct block *child = block->children_cow;
-		assert(child && !child->child_cow_next);
-		if (child->required || !cow_is_atomically_writable(child, NULL, NULL))
+		assert(child || block->required);
+		if (child)
+		{
+			assert(child && !child->child_cow_next);
+			if (!cow_is_atomically_writable(child, NULL, NULL))
+				break;
+		}
+		if (block->required)
 			break;
 		block = child;
 	}
