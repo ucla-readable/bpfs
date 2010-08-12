@@ -72,12 +72,16 @@
 - replace dcache bits for find_dirent() with persistent hashes in dirs?
 
 * current work
+- explain bytes written differences
+- implement SCSP-only mode
+
 - add benchmarks and measurement tools
 	- more benchmarks to contrast performance between bpfs and other fses?
 	- more macro/real-world benchmarks that involve durability
 		- how should we evaluate disk sync costs? #bytes written.
 	- benchmark ext3/4 with data journaling, too
 	- microbenchmark(s) for each syscall?
+		- chown? truncate separate from unlink? write into a hole?
 	- add macrobenchmarks: postmark, untar, rm, and a good one
 		- don't need to use bpramcount for setup
 	- expand microbenchmark repetition to ~fill ext[34] journals?
