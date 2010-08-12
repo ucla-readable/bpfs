@@ -43,7 +43,7 @@
 #define DETECT_ALLOCATION_DIFFS (!defined(NDEBUG))
 #define DETECT_NONCOW_WRITES_SP (COMMIT_MODE == MODE_SP && !defined(NDEBUG))
 #define DETECT_NONCOW_WRITES_SCSP \
-	(COMMIT_MODE == MODE_SCSP && !SCSP_OPT_APPEND && !defined(NDEBUG))
+	(COMMIT_MODE == MODE_SCSP && !SCSP_OPT_DIRECT && !defined(NDEBUG))
 // Alternatives to valgrind until it knows about our block alloc functions:
 // FIXME: broken with SCSP at the moment
 #define DETECT_STRAY_ACCESSES (COMMIT_MODE == MODE_SP && !defined(NDEBUG))
@@ -2011,7 +2011,7 @@ static int callback_set_cmtime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY)
+	if (commit == COMMIT_COPY && !SCSP_OPT_TIME)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2443,6 +2443,7 @@ static int callback_setattr(char *block, unsigned off,
 	assert(commit != COMMIT_NONE);
 
 	if (!(commit == COMMIT_FREE
+	      || (SCSP_OPT_TIME && count_bits(to_set & ~nonatomic) <= 1)
 	      || (COMMIT_MODE == MODE_BPFS
 	          && commit == COMMIT_ATOMIC
 	          && (count_bits(to_set & ~nonatomic) <= 1
@@ -2659,7 +2660,7 @@ static int callback_set_ctime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY)
+	if (commit == COMMIT_COPY && !SCSP_OPT_TIME)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -3170,7 +3171,7 @@ static int callback_set_atime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY)
+	if (commit == COMMIT_COPY && !SCSP_OPT_TIME)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -3449,7 +3450,7 @@ static int callback_set_mtime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY)
+	if (commit == COMMIT_COPY && !SCSP_OPT_TIME)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
