@@ -125,6 +125,7 @@ ADDRINT BpramWriteIf(VOID *addr)
 
 VOID RecordMemWriteBacktrace(CONTEXT *ctxt, VOID *rip, ADDRINT size)
 {
+	const btopt = "(Might this be because you are trying to backtrace optimized code?)"
 	void **ebp = reinterpret_cast<void**>(PIN_GetContextReg(ctxt, REG_BP_ARCH));
 	void **last_ebp = NULL;
 	backtrace bt;
@@ -140,20 +141,27 @@ VOID RecordMemWriteBacktrace(CONTEXT *ctxt, VOID *rip, ADDRINT size)
 		void *ebp_1;
 		void *ebp_0;
 		size_t n;
-		n = PIN_SafeCopy(&ebp_1, ebp + 1, sizeof(ebp_1));
+		EXCEPTION_INFO ei;
+		n = PIN_SafeCopyEx(&ebp_1, ebp + 1, sizeof(ebp_1), &ei);
 		if (!n)
 		{
-			printf("pin: st failed at depth %d\n", i);
+			printf("pin: stack trace failed at depth %d (lineno %d)\n", i,
+			       __LINE__);
+			printf("%s\n", btopt);
+			printf("EI: \"%s\"\n", PIN_ExceptionToString(&ei).c_str());
 			break;
 		}
 		if (!ebp_1)
 			break;
 		bt.ips[i++] = ebp_1;
 		last_ebp = ebp;
-		n = PIN_SafeCopy(&ebp_0, ebp, sizeof(ebp_0));
+		n = PIN_SafeCopyEx(&ebp_0, ebp, sizeof(ebp_0), &ei);
 		if (!n)
 		{
-			printf("pin: st failed at depth %d\n", i);
+			printf("pin: stack trace failed at depth %d (lineno %d)\n", i,
+			        __LINE__);
+			printf("%s\n", btopt);
+			printf("EI: \"%s\"\n", PIN_ExceptionToString(&ei).c_str());
 			break;
 		}
 		ebp = reinterpret_cast<void**>(ebp_0);
