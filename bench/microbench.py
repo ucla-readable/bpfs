@@ -31,7 +31,7 @@ class benchmarks:
 
     @staticmethod
     def micro():
-        for (name, obj) in all():
+        for (name, obj) in benchmarks.all():
             if not hasattr(obj, 'benchmacro'):
                 yield (name, obj)
 
@@ -564,7 +564,7 @@ def main():
             assert False, 'unhandled option'
 
     if not bench_names:
-        benches = benchmarks.micro()
+        benches = list(benchmarks.micro())
     else:
         bench_names = set(bench_names)
         for name, obj in inspect.getmembers(benchmarks):
