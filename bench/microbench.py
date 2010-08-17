@@ -531,6 +531,7 @@ def run(fs, benches, profile):
         if profile:
             subprocess.check_call(['./bench/parse_bpramcount'],
                                   stdin=open(pinfile))
+        sys.stdout.flush()
 
 def usage():
     print 'Usage: ' + sys.argv[0] + ' [-h|--help] [-t FS -d DEV] [-p] [BENCHMARK ...]'
