@@ -3007,15 +3007,26 @@ static void fuse_rename(fuse_req_t req,
 
 	if (src_md->file_type == BPFS_TYPE_DIR)
 	{
-		int nlinks_delta = -1;
-
-		r = crawl_inode(src_parent_ino, COMMIT_ATOMIC,
-		                callback_change_nlinks, &nlinks_delta);
-		if (r < 0)
-			goto abort;
-		if (!dst_existed)
+		if (src_parent_ino != dst_parent_ino)
 		{
-			nlinks_delta = 1;
+			int nlinks_delta = -1;
+			r = crawl_inode(src_parent_ino, COMMIT_ATOMIC,
+			                callback_change_nlinks, &nlinks_delta);
+			if (r < 0)
+				goto abort;
+		}
+
+		if (src_parent_ino != dst_parent_ino && !dst_existed)
+		{
+			int nlinks_delta = 1;
+			r = crawl_inode(dst_parent_ino, COMMIT_ATOMIC,
+			                callback_change_nlinks, &nlinks_delta);
+			if (r < 0)
+				goto abort;
+		}
+		else if (src_parent_ino == dst_parent_ino && dst_existed)
+		{
+			int nlinks_delta = -1;
 			r = crawl_inode(dst_parent_ino, COMMIT_ATOMIC,
 			                callback_change_nlinks, &nlinks_delta);
 			if (r < 0)
