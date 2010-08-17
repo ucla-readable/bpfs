@@ -80,7 +80,7 @@ struct height_addr
 
 struct bpfs_tree_root
 {
-	struct height_addr ha;
+	struct height_addr ha; // valid iff !!nbytes
 	uint64_t nbytes;
 };
 

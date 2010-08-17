@@ -79,6 +79,9 @@ int get_inode_offset(uint64_t ino, uint64_t *poffset);
 void ha_set_addr(struct height_addr *pha, uint64_t addr);
 void ha_set(struct height_addr *pha, uint64_t height, uint64_t addr);
 
+uint64_t tree_root_height(const struct bpfs_tree_root *root);
+uint64_t tree_root_addr(const struct bpfs_tree_root *root);
+
 int truncate_block_zero(struct bpfs_tree_root *root,
                         uint64_t begin, uint64_t end, uint64_t valid,
                         uint64_t *blockno);

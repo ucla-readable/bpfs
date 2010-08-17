@@ -271,7 +271,7 @@ void crawl_blocknos(const struct bpfs_tree_root *root,
                     uint64_t off, uint64_t size,
                     crawl_blockno_callback callback)
 {
-	uint64_t max_nblocks = tree_max_nblocks(root->ha.height);
+	uint64_t max_nblocks = tree_max_nblocks(tree_root_height(root));
 	uint64_t max_nbytes = max_nblocks * BPFS_BLOCK_SIZE;
 	uint64_t valid;
 
@@ -281,6 +281,8 @@ void crawl_blocknos(const struct bpfs_tree_root *root,
 	assert(!off || off < root->nbytes);
 	if (size == BPFS_EOF)
 		size = root->nbytes - off;
+	else
+		assert(off + size <= root->nbytes);
 	assert(size <= root->nbytes);
 	assert(off + size <= root->nbytes);
 
@@ -291,17 +293,17 @@ void crawl_blocknos(const struct bpfs_tree_root *root,
 	valid = MIN(root->nbytes, max_nbytes);
 
 
-	if (!root->ha.height)
+	if (!tree_root_height(root))
 	{
 		if (!off)
-			crawl_leaf(root->ha.addr, 0, off, size, valid, off,
+			crawl_leaf(tree_root_addr(root), 0, off, size, valid, off,
 			           COMMIT_NONE, NULL, NULL, callback, NULL);
 	}
 	else
 	{
-		crawl_indir(root->ha.addr, off / BPFS_BLOCK_SIZE,
+		crawl_indir(tree_root_addr(root), off / BPFS_BLOCK_SIZE,
 		            off, size, valid, off, COMMIT_NONE,
-		            root->ha.height, max_nblocks,
+		            tree_root_height(root), max_nblocks,
 		            NULL, NULL, callback, NULL);
 	}
 }
@@ -339,7 +341,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 
 	if (commit != COMMIT_NONE)
 	{
-		uint64_t prev_height = root->ha.height;
+		uint64_t prev_height = tree_root_height(root);
 		uint64_t requested_height = tree_height(NBLOCKS_FOR_NBYTES(end));
 		uint64_t new_height = MAXU64(prev_height, requested_height);
 #ifndef NDEBUG
@@ -389,7 +391,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 		}
 	}
 
-	child_new_blockno = root->nbytes ? root->ha.addr : BPFS_BLOCKNO_INVALID;
+	child_new_blockno = tree_root_addr(root);
 	max_nblocks = tree_max_nblocks(root->ha.height);
 	if (commit != COMMIT_NONE)
 	{
@@ -433,7 +435,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 
 	if (r >= 0)
 	{
-		bool change_addr = root->ha.addr != child_new_blockno;
+		bool change_addr = tree_root_addr(root) != child_new_blockno;
 		bool change_size = end > root->nbytes;
 
 		if (commit == COMMIT_NONE)
@@ -483,7 +485,15 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 			}
 
 			if (change_addr)
+			{
 				ha_set_addr(&root->ha, child_new_blockno);
+#if SCSP_OPT_APPEND
+				if (!root->nbytes)
+					indirect_cow_block_direct(new_blockno,
+					                          block_offset(&root->ha),
+					                          sizeof(root->ha));
+#endif
+			}
 			if (change_size)
 				root->nbytes = end;
 
