@@ -239,6 +239,9 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 				indir = (struct bpfs_indir_block*) get_block(blockno);
 			}
 			indir->addr[no] = child_new_blockno;
+			if (SCSP_OPT_APPEND && only_invalid)
+				indirect_cow_block_direct(blockno, no * sizeof(*indir->addr),
+				                          sizeof(*indir->addr));
 		}
 		if (r == 1)
 		{

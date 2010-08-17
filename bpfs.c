@@ -2011,7 +2011,8 @@ static int callback_set_cmtime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY && !SCSP_OPT_TIME)
+#if !SCSP_OPT_TIME
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2019,9 +2020,16 @@ static int callback_set_cmtime(char *block, unsigned off,
 		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
+#endif
 	inode = (struct bpfs_inode*) (block + off);
 
 	inode->ctime = inode->mtime = *new_time;
+#if SCSP_OPT_TIME
+	indirect_cow_block_direct(new_blockno, block_offset(&inode->mtime),
+	                          sizeof(inode->mtime));
+	indirect_cow_block_direct(new_blockno, block_offset(&inode->ctime),
+	                          sizeof(inode->ctime));
+#endif
 
 	*blockno = new_blockno;
 	return 0;
@@ -2518,6 +2526,20 @@ static int callback_setattr(char *block, unsigned off,
 	if (to_set & FUSE_SET_ATTR_SIZE)
 		inode->mtime = inode->ctime;
 
+#if SCSP_OPT_TIME
+	if (count_bits(to_set & ~nonatomic) <= 1)
+	{
+		if (to_set & (FUSE_SET_ATTR_ATIME))
+			indirect_cow_block_direct(new_blockno, block_offset(&inode->atime),
+			                          sizeof(inode->atime));
+		if (to_set & (FUSE_SET_ATTR_MTIME | FUSE_SET_ATTR_SIZE))
+			indirect_cow_block_direct(new_blockno, block_offset(&inode->mtime),
+			                          sizeof(inode->mtime));
+		indirect_cow_block_direct(new_blockno, block_offset(&inode->ctime),
+		                          sizeof(inode->ctime));
+	}
+#endif
+
 	*blockno = new_blockno;
 	return 0;
 }
@@ -2661,7 +2683,8 @@ static int callback_set_ctime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY && !SCSP_OPT_TIME)
+#if !SCSP_OPT_TIME
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -2669,9 +2692,14 @@ static int callback_set_ctime(char *block, unsigned off,
 		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
+#endif
 	inode = (struct bpfs_inode*) (block + off);
 
 	inode->ctime = *new_time;
+#if SCSP_OPT_TIME
+	indirect_cow_block_direct(new_blockno, block_offset(&inode->ctime),
+	                          sizeof(inode->ctime));
+#endif
 
 	*blockno = new_blockno;
 	return 0;
@@ -3172,7 +3200,8 @@ static int callback_set_atime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY && !SCSP_OPT_TIME)
+#if !SCSP_OPT_TIME
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -3180,9 +3209,14 @@ static int callback_set_atime(char *block, unsigned off,
 		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
+#endif
 	inode = (struct bpfs_inode*) (block + off);
 
 	inode->atime = *new_time;
+#if SCSP_OPT_TIME
+	indirect_cow_block_direct(new_blockno, block_offset(&inode->atime),
+	                          sizeof(inode->atime));
+#endif
 
 	*blockno = new_blockno;
 	return 0;
@@ -3438,6 +3472,9 @@ static int callback_write(uint64_t blockoff, char *block,
 
 	// TODO: if can_atomic_write(), will memcpy() make just one write?
 	memcpy(block + off, buf + buf_offset, size);
+	if (SCSP_OPT_APPEND && off >= valid)
+		indirect_cow_block_direct(*new_blockno, off, size);
+
 	return 0;
 }
 
@@ -3451,7 +3488,8 @@ static int callback_set_mtime(char *block, unsigned off,
 
 	assert(commit != COMMIT_NONE);
 
-	if (commit == COMMIT_COPY && !SCSP_OPT_TIME)
+#if !SCSP_OPT_TIME
+	if (commit == COMMIT_COPY)
 	{
 		new_blockno = cow_block_entire(new_blockno);
 		if (new_blockno == BPFS_BLOCKNO_INVALID)
@@ -3459,9 +3497,14 @@ static int callback_set_mtime(char *block, unsigned off,
 		indirect_cow_block_required(new_blockno);
 		block = get_block(new_blockno);
 	}
+#endif
 	inode = (struct bpfs_inode*) (block + off);
 
 	inode->mtime = *new_time;
+#if SCSP_OPT_TIME
+	indirect_cow_block_direct(new_blockno, block_offset(&inode->mtime),
+	                          sizeof(inode->mtime));
+#endif
 
 	*blockno = new_blockno;
 	return 0;

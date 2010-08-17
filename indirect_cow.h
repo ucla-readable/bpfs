@@ -17,6 +17,8 @@ void indirect_cow_parent_pop(uint64_t blkno);
 int indirect_cow_block_cow(uint64_t orig_blkno, uint64_t cow_blkno);
 char* indirect_cow_block_get(uint64_t blkno);
 void indirect_cow_block_required(uint64_t blkno);
+// Write the changes in this region immediately if blkno is CoWed
+void indirect_cow_block_direct(uint64_t blkno, unsigned off, unsigned size);
 
 void indirect_cow_commit(void);
 void indirect_cow_abort(void);

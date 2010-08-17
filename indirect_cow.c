@@ -297,6 +297,24 @@ void indirect_cow_block_required(uint64_t blkno)
 		assert(block_freshly_alloced(blkno));
 }
 
+void indirect_cow_block_direct(uint64_t blkno, unsigned off, unsigned size)
+{
+	struct block *block = hash_map_find_val(blkno_map_cow, u64_ptr(blkno));
+	Dprintf("%s(blkno = %" PRIu64 ", off = %u, size = %u)\n",
+	        __FUNCTION__, blkno, off, size);
+
+	assert(blkno != BPFS_BLOCKNO_INVALID);
+	assert(off < BPFS_BLOCK_SIZE && size <= BPFS_BLOCK_SIZE);
+	assert(off + size <= BPFS_BLOCK_SIZE);
+
+	if (!block
+	    || block->orig_blkno == BPFS_BLOCKNO_INVALID
+	    || block->cow_blkno == BPFS_BLOCKNO_INVALID)
+		return;
+
+	memcpy(get_block(block->orig_blkno) + off, block->dram + off, size);
+}
+
 
 static bool cow_is_atomically_writable(const struct block *block,
                                        uint64_t *atomic_new,
@@ -398,8 +416,7 @@ void indirect_cow_commit(void)
 		block = child;
 	}
 	atomic_blkno = block->orig_blkno;
-	(void) cow_is_atomically_writable(block, &atomic_new, &atomic_off);
-	assert(atomic_off < BPFS_BLOCK_SIZE);
+	xassert(cow_is_atomically_writable(block, &atomic_new, &atomic_off));
 	notatomic_block = block->children_cow;
 
 	// Revert the parents of notatomic_block to their original state
@@ -452,8 +469,13 @@ void indirect_cow_commit(void)
 	}
 
 	// Atomically commit
-	block_bpram = get_block(atomic_blkno);
-	*(uint64_t*) (block_bpram + atomic_off) = atomic_new;
+	// (There can be nothing to commit when all CoWs were unnecessary
+	//  or direct.)
+	if (atomic_off != BPFS_BLOCK_SIZE)
+	{
+		block_bpram = get_block(atomic_blkno);
+		*(uint64_t*) (block_bpram + atomic_off) = atomic_new;
+	}
 }
 
 void indirect_cow_abort(void)
@@ -521,6 +543,9 @@ char* indirect_cow_block_get(uint64_t blkno)
 	return NULL;
 }
 void indirect_cow_block_required(uint64_t blkno)
+{
+}
+void indirect_cow_block_direct(uint64_t blkno, unsigned off, unsigned size)
 {
 }
 
