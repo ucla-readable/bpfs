@@ -55,7 +55,7 @@ class benchmarks:
         opt = 8          + 8
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
-            file.write('0' * 4096)
+            file.write('1' * 4096)
             file.close()
         def run(self):
             os.unlink(os.path.join(self.mnt, 'a'))
@@ -66,7 +66,7 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(1 * 64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             os.unlink(os.path.join(self.mnt, 'a'))
@@ -77,7 +77,7 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(16 * 64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             os.unlink(os.path.join(self.mnt, 'a'))
@@ -156,7 +156,7 @@ class benchmarks:
             open(os.path.join(self.mnt, 'a'), 'w').close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'a')
-            file.write('0' * 8)
+            file.write('2' * 8)
             file.close()
 
     class append_8B_8B:
@@ -164,11 +164,11 @@ class benchmarks:
         opt = 8    + 8    + 4
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
-            file.write('0' * 8)
+            file.write('1' * 8)
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'a')
-            file.write('0' * 8)
+            file.write('2' * 8)
             file.close()
 
     class append_0B_4k:
@@ -178,7 +178,7 @@ class benchmarks:
             open(os.path.join(self.mnt, 'a'), 'w').close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'a')
-            file.write('0' * 4096)
+            file.write('2' * 4096)
             file.close()
 
     class append_8k_4k:
@@ -186,11 +186,11 @@ class benchmarks:
         opt = 4096 + 8    + 8    + 4
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
-            file.write('0' * (8 * 1024))
+            file.write('1' * (8 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'a')
-            file.write('0' * 4096)
+            file.write('2' * 4096)
             file.close()
 
     # 128kiB is the largest that FUSE will atomically write
@@ -202,7 +202,7 @@ class benchmarks:
             open(os.path.join(self.mnt, 'a'), 'w').close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'a')
-            file.write('0' * (128 * 1024))
+            file.write('2' * (128 * 1024))
             file.close()
 
     class append_2M_4k:
@@ -211,11 +211,11 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(2 * 64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'a')
-            file.write('0' * 4096)
+            file.write('2' * 4096)
             file.close()
 
     # 128kiB is the largest that FUSE will atomically write
@@ -225,11 +225,11 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(2 * 64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'a')
-            file.write('0' * (128 * 1024))
+            file.write('2' * (128 * 1024))
             file.close()
 
     class write_1M_8B:
@@ -238,11 +238,11 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
-            file.write('0' * 8)
+            file.write('2' * 8)
             file.close()
 
     class write_1M_8B_4092:
@@ -252,12 +252,12 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
             file.seek(4096 - 4)
-            file.write('0' * 8)
+            file.write('2' * 8)
             file.close()
 
     class write_1M_16B:
@@ -266,11 +266,11 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
-            file.write('0' * 16)
+            file.write('2' * 16)
             file.close()
 
     class write_1M_4k:
@@ -279,11 +279,11 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
-            file.write('0' * 4096)
+            file.write('2' * 4096)
             file.close()
 
     class write_1M_4k_1:
@@ -292,12 +292,12 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
             file.seek(1)
-            file.write('0' * 4096)
+            file.write('2' * 4096)
             file.close()
 
     # 128kiB is the largest that FUSE will atomically write
@@ -308,11 +308,11 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
-            file.write('0' * (128 * 1024))
+            file.write('2' * (128 * 1024))
             file.close()
 
     # 128kiB is the largest that FUSE will atomically write
@@ -323,12 +323,12 @@ class benchmarks:
         def prepare(self):
             file = open(os.path.join(self.mnt, 'a'), 'w')
             for i in range(64):
-                file.write('0' * (16 * 1024))
+                file.write('1' * (16 * 1024))
             file.close()
         def run(self):
             file = open(os.path.join(self.mnt, 'a'), 'r+', 0)
             file.seek(1)
-            file.write('0' * (124 * 1024))
+            file.write('2' * (124 * 1024))
             file.close()
 
     class read:
