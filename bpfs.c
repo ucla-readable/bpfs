@@ -1943,18 +1943,20 @@ static int callback_addrem_dirent(char *block, unsigned off,
 	if (cadd->dir && cadd->add && !(inode->nlinks + 1))
 		return -EMLINK;
 
-	if (commit == COMMIT_COPY)
-	{
-		new_blockno = cow_block_entire(*blockno);
-		if (new_blockno == BPFS_BLOCKNO_INVALID)
-			return -ENOSPC;
-		indirect_cow_block_required(new_blockno);
-		block = get_block(new_blockno);
-	}
-	inode = (struct bpfs_inode*) (block + off);
-
+	// TODO: why does this write 4 fewer bytes for SCSP than when it is
+	// placed after crawl_tree() and the cow also guarded by same block?
 	if (cadd->dir)
 	{
+		if (commit == COMMIT_COPY)
+		{
+			new_blockno = cow_block_entire(*blockno);
+			if (new_blockno == BPFS_BLOCKNO_INVALID)
+				return -ENOSPC;
+			indirect_cow_block_required(new_blockno);
+			block = get_block(new_blockno);
+		}
+		inode = (struct bpfs_inode*) (block + off);
+
 		if (cadd->add)
 			inode->nlinks++;
 		else
