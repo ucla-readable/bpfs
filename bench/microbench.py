@@ -100,7 +100,7 @@ class benchmarks:
         def run(self):
             os.rmdir(os.path.join(self.mnt, 'a'))
 
-    class rename_intra:
+    class rename_file_intra:
         # TODO: could reduce dirent block by 2*8 and by unused
         #     inos + dirents + ino_root + cmtime + rec_len + dirent
         opt = 2*8  + 4096    + 8        + 2*4    + 2       + 2+1+2+1
@@ -109,7 +109,7 @@ class benchmarks:
         def run(self):
             os.rename(os.path.join(self.mnt, 'a'), os.path.join(self.mnt, 'b'))
 
-    class rename_inter:
+    class rename_file_inter:
         # TODO: could reduce dirent blocks by 2*8 and by unused
         # TODO: could reduce ino_roots by 2*8 and by unused
         #     inos + dirents + ino_roots+ ira + cmtime + rec_len + dirent
@@ -123,7 +123,7 @@ class benchmarks:
             os.rename(os.path.join(self.mnt, 'a', 'c'),
                       os.path.join(self.mnt, 'b', 'c'))
 
-    class rename_clobber:
+    class rename_file_clobber:
         # TODO: could reduce dirent blocks by 2*8 and by unused
         # TODO: could reduce ino_roots by 2*8 and by unused
         #     inos + dirents + ino_root + cmtime
@@ -131,6 +131,41 @@ class benchmarks:
         def prepare(self):
             open(os.path.join(self.mnt, 'a'), 'w').close()
             open(os.path.join(self.mnt, 'b'), 'w').close()
+        def run(self):
+            os.rename(os.path.join(self.mnt, 'a'), os.path.join(self.mnt, 'b'))
+
+    class rename_dir_intra:
+        # TODO: could reduce dirent block by 2*8 and by unused
+        #     inos + dirents + ino_root + cmtime + rec_len + dirent  + old and new parent nlinks + child ctime
+        opt = 2*8  + 4096    + 8        + 2*4    + 2       + 2+1+2+1 + 2*4                       + 4
+        # over file, has 3x4B callback_crawl_inode calls: nlinks [on]p, ctime
+        def prepare(self):
+            os.mkdir(os.path.join(self.mnt, 'a'))
+        def run(self):
+            os.rename(os.path.join(self.mnt, 'a'), os.path.join(self.mnt, 'b'))
+
+    class rename_dir_inter:
+        # TODO: could reduce dirent blocks by 2*8 and by unused
+        # TODO: could reduce ino_roots by 2*8 and by unused
+        #     inos + dirents + ino_roots+ ira + cmtime + rec_len + dirent  + old and new parent nlinks + child ctime
+        #                                (ira = root_inode addr)
+        opt = 2*8  + 2*4096  + 4096+2*8 + 8   + 4*4    + 2       + 2+1+2+1 + 2*4                       + 4
+        def prepare(self):
+            os.mkdir(os.path.join(self.mnt, 'a'))
+            os.mkdir(os.path.join(self.mnt, 'b'))
+            os.mkdir(os.path.join(self.mnt, 'a', 'c'))
+        def run(self):
+            os.rename(os.path.join(self.mnt, 'a', 'c'),
+                      os.path.join(self.mnt, 'b', 'c'))
+
+    class rename_dir_clobber:
+        # TODO: could reduce dirent blocks by 2*8 and by unused
+        # TODO: could reduce ino_roots by 2*8 and by unused
+        #     inos + dirents + ino_root + cmtime + old parent nlinks + child ctime
+        opt = 2*8  + 4096    + 8        + 2*4    + 4                 + 4
+        def prepare(self):
+            os.mkdir(os.path.join(self.mnt, 'a'))
+            os.mkdir(os.path.join(self.mnt, 'b'))
         def run(self):
             os.rename(os.path.join(self.mnt, 'a'), os.path.join(self.mnt, 'b'))
 
