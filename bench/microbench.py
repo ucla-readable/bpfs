@@ -18,11 +18,21 @@ import sys
 import tempfile
 import time
 
+def benchmacro(bench_class):
+    bench_class.benchmacro = True
+    return bench_class
+
 class benchmarks:
     @staticmethod
     def all():
         for name, obj in inspect.getmembers(benchmarks):
             if inspect.isclass(obj):
+                yield (name, obj)
+
+    @staticmethod
+    def micro():
+        for (name, obj) in all():
+            if not hasattr(obj, 'benchmacro'):
                 yield (name, obj)
 
     class empty:
@@ -347,6 +357,20 @@ class benchmarks:
         def run(self):
             os.listdir(self.mnt)
 
+    @benchmacro
+    class postmark:
+        free_space = 2 * 1024
+        def run(self):
+            config = tempfile.NamedTemporaryFile()
+            config.write('set location ' + self.mnt + '\n')
+            defaults = open('bench/postmark.config')
+            for line in defaults:
+                config.write(line)
+            defaults.close()
+            config.flush()
+            config.seek(0)
+            subprocess.check_call(['bench/postmark-1_5'],
+                                  stdin=config, close_fds=True)
 
 class filesystem_bpfs:
     _mount_overheads = { 'BPFS': 1 } # the valid field
@@ -505,7 +529,7 @@ def main():
             assert False, 'unhandled option'
 
     if not bench_names:
-        benches = benchmarks.all()
+        benches = benchmarks.micro()
     else:
         bench_names = set(bench_names)
         for name, obj in inspect.getmembers(benchmarks):
@@ -513,7 +537,11 @@ def main():
                 benches.append((name, obj))
 
     if fs_name == 'bpfs':
-        fs = filesystem_bpfs(32)
+        bpfs_size = 32
+        for (name, obj) in benches:
+            if hasattr(obj, 'free_space'):
+                bpfs_size = max(bpfs_size, obj.free_space)
+        fs = filesystem_bpfs(bpfs_size)
     else:
         if dev == None:
             raise NameError('Must provide a backing device for ' + fs_name)
