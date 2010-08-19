@@ -102,7 +102,7 @@ int mkbpfs(char *bpram, size_t bpram_size)
 
 	for (i = 0; i < INODES_NBLOCKS; i++)
 	{
-#ifndef NDEBUG
+#if APPEASE_VALGRIND
 		int j;
 #endif
 		inodes_indir->addr[i] = alloc_block(super);
