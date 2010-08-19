@@ -134,8 +134,12 @@ VOID RecordMemWriteBacktrace(CONTEXT *ctxt, VOID *rip, ADDRINT size)
 	nbytes += size;
 
 	bt.ips[0] = reinterpret_cast<void*>(PIN_GetContextReg(ctxt, REG_INST_PTR));
+
+	// Normally rip contains numbers that are small and not in a function.
+	// But sometimes REG_INST_PTR (aka EIP) is bogus and rip is not.
 	if (rip)
-		bt.ips[i++] = rip;
+		bt.ips[++i] = rip;
+
 	while (ebp >= last_ebp && i < NBSTEPS)
 	{
 		void *ebp_1;
@@ -153,7 +157,7 @@ VOID RecordMemWriteBacktrace(CONTEXT *ctxt, VOID *rip, ADDRINT size)
 		}
 		if (!ebp_1)
 			break;
-		bt.ips[i++] = ebp_1;
+		bt.ips[++i] = ebp_1;
 		last_ebp = ebp;
 		n = PIN_SafeCopyEx(&ebp_0, ebp, sizeof(ebp_0), &ei);
 		if (!n)
