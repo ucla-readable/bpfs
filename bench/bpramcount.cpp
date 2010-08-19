@@ -125,7 +125,7 @@ ADDRINT BpramWriteIf(VOID *addr)
 
 VOID RecordMemWriteBacktrace(CONTEXT *ctxt, VOID *rip, ADDRINT size)
 {
-	const btopt = "(Might this be because you are trying to backtrace optimized code?)"
+	const char *btopt = "(Might this be because you are trying to backtrace optimized code?)";
 	void **ebp = reinterpret_cast<void**>(PIN_GetContextReg(ctxt, REG_BP_ARCH));
 	void **last_ebp = NULL;
 	backtrace bt;
