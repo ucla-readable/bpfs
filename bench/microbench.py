@@ -529,6 +529,7 @@ def run(fs, benches, profile):
             sys.stdout.write(')')
         print ''
         if profile:
+            #subprocess.check_call(['cat'], stdin=open(pinfile))
             subprocess.check_call(['./bench/parse_bpramcount'],
                                   stdin=open(pinfile))
         sys.stdout.flush()
