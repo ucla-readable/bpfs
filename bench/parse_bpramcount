@@ -45,8 +45,12 @@ for line in sys.stdin:
 		function = ap.stdout.readline()[:-1]
 		fileline = ap.stdout.readline()[:-1].split(':')
 		filename = fileline[0]
+		filename = filename.split('/')[-1] # just the file, not dirs
 		lineno = fileline[1]
-		backtrace.append("%s:%s" % (function, lineno))
+		if function == '??' and filename == '??' and lineno == '0':
+			backtrace.append(ip)
+		else:
+			backtrace.append("%s:%s" % (function, lineno))
 
 	backtrace = tuple(backtrace)
 	if backtrace in backtraces:
