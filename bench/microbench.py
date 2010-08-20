@@ -532,6 +532,7 @@ def run(fs, benches, profile):
             #subprocess.check_call(['cat'], stdin=open(pinfile))
             subprocess.check_call(['./bench/parse_bpramcount'],
                                   stdin=open(pinfile))
+            os.unlink(pinfile)
         sys.stdout.flush()
 
 def usage():
