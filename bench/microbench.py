@@ -47,10 +47,16 @@ class benchmarks:
             open(os.path.join(self.mnt, 'a'), 'w').close()
 
     class mkdir:
-        #     dirent + ino                 + cmtime + root + nlinks + nbytes + rl + d.ft + nlinks + d.ino
-        opt = 4+1+2  + 8+4+4+4+4+8+8+8+3*4 + 4+4    + 8    + 4      + 8      + 2  + 1    + 4      + 8
+        #     dirent + ino                 + cmtime + d.ft + d.nlinks + d.ino + dirent.rec_len
+        opt = 4+1+2  + 8+4+4+4+4+8+8+8+3*4 + 4+4    + 1    + 4        + 8     + 2
         def run(self):
             os.mkdir(os.path.join(self.mnt, 'a'))
+
+    class symlink:
+        #     dirent + ino                 + cmtime + d.ft + d.ino + filename
+        opt = 4+1+2  + 8+4+4+4+4+8+8+8+3*4 + 4+4    + 1    + 8     + 2
+        def run(self):
+            os.symlink('a', os.path.join(self.mnt, 'b'))
 
     class unlink_0B:
         #     dirent.ino + cmtime
@@ -99,6 +105,14 @@ class benchmarks:
             os.mkdir(os.path.join(self.mnt, 'a'))
         def run(self):
             os.rmdir(os.path.join(self.mnt, 'a'))
+
+    class unlink_symlink:
+        #     dirent.ino + cmtime
+        opt = 8          + 8
+        def prepare(self):
+            os.symlink('a', os.path.join(self.mnt, 'b'))
+        def run(self):
+            os.unlink(os.path.join(self.mnt, 'b'))
 
     class rename_file_intra:
         # TODO: could reduce dirent block by 2*8 and by unused
@@ -193,6 +207,15 @@ class benchmarks:
             open(os.path.join(self.mnt, 'a'), 'w').close()
         def run(self):
             os.chmod(os.path.join(self.mnt, 'a'), stat.S_IWUSR | stat.S_IRUSR)
+
+    class chown:
+        #     uid + gid + ctime
+        opt = 4   + 4   + 4
+        def prepare(self):
+            open(os.path.join(self.mnt, 'a'), 'w').close()
+        def run(self):
+            # Change to self (probably no change) to not require root
+            os.chown(os.path.join(self.mnt, 'a'), os.getuid(), os.getgid())
 
     class append_0B_8B:
         #     data + root + size + mtime
