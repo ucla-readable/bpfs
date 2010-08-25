@@ -215,7 +215,7 @@ class benchmarks:
             open(os.path.join(self.mnt, 'a'), 'w').close()
         def run(self):
             # Change to self (probably no change) to not require root
-            os.chown(os.path.join(self.mnt, 'a'), os.getuid(), os.getgid())
+            os.chown(os.path.join(self.mnt, 'a'), 0, 0)
 
     class append_0B_8B:
         #     data + root + size + mtime
