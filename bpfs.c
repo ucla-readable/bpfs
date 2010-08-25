@@ -2006,11 +2006,12 @@ static int callback_init_inode(char *block, unsigned off,
 	inode->mode = f2b_mode(ciid->mode);
 	inode->uid = ciid->ctx->uid;
 	inode->gid = ciid->ctx->gid;
-	inode->nlinks = 1;
+	// inode->nlinks = 1; // set by caller
 	inode->flags = 0;
-	ha_set(&inode->root.ha, 0, BPFS_BLOCKNO_INVALID);
-	inode->root.nbytes = 0;
+	// ha_set(&inode->root.ha, 0, BPFS_BLOCKNO_INVALID); // set by caller
+	// inode->root.nbytes = 0; // set by caller
 	inode->mtime = inode->ctime = inode->atime = BPFS_TIME_NOW();
+
 	// NOTE: inode->pad is uninitialized.
 	// A format ugprade can zero needed fields before bumping the version.
 	//memset(inode->pad, 0, sizeof(inode->pad));
@@ -2061,6 +2062,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	struct str_dirent sd = {{name, name_len}, BPFS_EOF, NULL};
 	struct callback_init_inode_data ciid = {mode, fuse_req_ctx(req)};
 	struct callback_addrem_dirent_data cadd = {true, 0, BPFS_INO_INVALID, S_ISDIR(mode)};
+	struct bpfs_inode *inode;
 	struct mdirent mdirent;
 	int r;
 
@@ -2093,13 +2095,13 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 	if (r < 0)
 		return r;
 
+	// inode's block freshly allocated for [SC]SP and inode ignored for BPFS
+	inode = get_inode(ino);
+	assert(inode);
+
 	if (S_ISDIR(mode) || S_ISLNK(mode))
 	{
-		// inode's block freshly allocated for SP and inode ignored for SCSP
-		struct bpfs_inode *inode = get_inode(ino);
-		assert(inode);
-
-		ha_set_addr(&inode->root.ha, alloc_block());
+		ha_set(&inode->root.ha, 0, alloc_block());
 		if (inode->root.ha.addr == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 
@@ -2107,7 +2109,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 		{
 			struct bpfs_dirent *ndirent;
 
-			inode->nlinks++; // for the ".." dirent
+			inode->nlinks = 2; // for the ".." dirent
 
 			inode->root.nbytes = BPFS_BLOCK_SIZE;
 
@@ -2119,10 +2121,19 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 		}
 		else if (S_ISLNK(mode))
 		{
+			inode->nlinks = 1;
+
 			inode->root.nbytes = strlen(link) + 1;
+
 			assert(inode->root.nbytes <= BPFS_BLOCK_SIZE); // else use crawler
 			memcpy(get_block(inode->root.ha.addr), link, inode->root.nbytes);
 		}
+	}
+	else
+	{
+		inode->nlinks = 1;
+		inode->root.nbytes = 0;
+		ha_set(&inode->root.ha, 0, BPFS_BLOCKNO_INVALID);
 	}
 
 	// dirent's block is freshly allocated or already copied
