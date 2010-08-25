@@ -2556,17 +2556,14 @@ static int callback_setattr(char *block, unsigned off,
 		inode->mtime = inode->ctime;
 
 #if SCSP_OPT_TIME
-	if (count_bits(to_set & ~nonatomic) <= 1)
-	{
-		if (to_set & (FUSE_SET_ATTR_ATIME))
-			indirect_cow_block_direct(new_blockno, block_offset(&inode->atime),
-			                          sizeof(inode->atime));
-		if (to_set & (FUSE_SET_ATTR_MTIME | FUSE_SET_ATTR_SIZE))
-			indirect_cow_block_direct(new_blockno, block_offset(&inode->mtime),
-			                          sizeof(inode->mtime));
-		indirect_cow_block_direct(new_blockno, block_offset(&inode->ctime),
-		                          sizeof(inode->ctime));
-	}
+	if (to_set & (FUSE_SET_ATTR_ATIME))
+		indirect_cow_block_direct(new_blockno, block_offset(&inode->atime),
+		                          sizeof(inode->atime));
+	if (to_set & (FUSE_SET_ATTR_MTIME | FUSE_SET_ATTR_SIZE))
+		indirect_cow_block_direct(new_blockno, block_offset(&inode->mtime),
+		                          sizeof(inode->mtime));
+	indirect_cow_block_direct(new_blockno, block_offset(&inode->ctime),
+	                          sizeof(inode->ctime));
 #endif
 
 	*blockno = new_blockno;
