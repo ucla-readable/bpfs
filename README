@@ -24,7 +24,7 @@ BPFS can use a memory-mapped file/device or run in DRAM:
 - DRAM (no need to create a file and contents are lost at exit):
   1. ./bpfs -s $((N * 1024 * 1024)) $MNT
 
-There are several configuration macros at the top of bpfs.c.
+There are several configuration macros at the top of bpfs.h and bpfs.c.
 
 You can also profile BPFS's memory write traffic using the Pintool
 bench/bpramcount.cpp. bench/bpramcount runs BPFS inside of Pin and
