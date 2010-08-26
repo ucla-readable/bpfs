@@ -2173,7 +2173,14 @@ static void fuse_init(void *userdata, struct fuse_conn_info *conn)
 		case MODE_BPFS: mode = "BPFS"; break;
 		default: assert(0); mode = NULL;
 	}
-	printf("BPFS running in %s mode\n", mode);
+	printf("BPFS running in %s mode", mode);
+#if SCSP_OPT_APPEND
+	printf(" (SCSP_OPT_APPEND)");
+#endif
+#if SCSP_OPT_TIME
+	printf(" (SCSP_OPT_TIME)");
+#endif
+	printf("\n");
 	fflush(stdout);
 	bpfs_commit();
 }
