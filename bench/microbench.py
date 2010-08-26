@@ -214,7 +214,6 @@ class benchmarks:
         def prepare(self):
             open(os.path.join(self.mnt, 'a'), 'w').close()
         def run(self):
-            # Change to self (probably no change) to not require root
             os.chown(os.path.join(self.mnt, 'a'), 0, 0)
 
     class append_0B_8B:
