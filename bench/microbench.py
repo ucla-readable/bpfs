@@ -488,7 +488,13 @@ class filesystem_bpfs:
 
 class filesystem_kernel:
     def __init__(self, fs_name, img):
-        self.fs_name = fs_name
+        fs_full = fs_name.split('-')
+        if len(fs_full) > 1:
+            self.fs_name = fs_full[0]
+            self.fs_mode = fs_full[1]
+        else:
+            self.fs_name = fs_name
+            self.fs_mode = None
         self.img = img
         # NOTE: self.mnt should not be in ~/ so that gvfs does not readdir it
         self.mnt = tempfile.mkdtemp()
@@ -511,8 +517,11 @@ class filesystem_kernel:
                 return int(fields[9]) * 512
         raise NameError('Device ' + dev_name + ' not found in /proc/diskstats')
     def mount(self, pinfile=None):
-        subprocess.check_call(['sudo', 'mount', self.img, self.mnt],
-                              close_fds=True)
+        cmd = ['sudo', 'mount', self.img, self.mnt]
+        if self.fs_mode and self.fs_name in ['ext3', 'ext4']:
+                cmd.append('-o')
+                cmd.append('data=' + self.fs_mode)
+        subprocess.check_call(cmd, close_fds=True)
         self.mounted = True
         subprocess.check_call(['sudo', 'chmod', '777', self.mnt],
                               close_fds=True)
