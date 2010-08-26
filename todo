@@ -73,7 +73,7 @@
 
 * current work
 - explain bytes written differences
-- implement SCSP-only mode
+- optimize cows that are made (ie cow and then overwrite some blocks)
 
 - add benchmarks and measurement tools
 	- more benchmarks to contrast performance between bpfs and other fses?
