@@ -429,6 +429,15 @@ class benchmarks:
             subprocess.check_call(['bench/postmark-1_5'],
                                   stdin=config, close_fds=True)
 
+    @benchmacro
+    class tarx:
+        free_space = 1024
+        def run(self):
+            tar_file = 'bench/linux-2.6.15.tar'
+            subprocess.check_call(['tar', '-xf', tar_file, '-C', self.mnt],
+                                  close_fds=True)
+
+
 class filesystem_bpfs:
     _mount_overheads = { 'BPFS': 1 } # the valid field
     def __init__(self, megabytes):
