@@ -150,8 +150,8 @@ class benchmarks:
 
     class rename_dir_intra:
         # TODO: could reduce dirent block by 2*8 and by unused
-        #     inos + dirents + ino_root + cmtime + rec_len + dirent  + old and new parent nlinks + child ctime
-        opt = 2*8  + 4096    + 8        + 2*4    + 2       + 2+1+2+1 + 2*4                       + 4
+        #     inos + dirents + ino_root + cmtime + rec_len + dirent  + child ctime
+        opt = 2*8  + 4096    + 8        + 2*4    + 2       + 2+1+2+1 + 4
         # over file, has 3x4B callback_crawl_inode calls: nlinks [on]p, ctime
         def prepare(self):
             os.mkdir(os.path.join(self.mnt, 'a'))
