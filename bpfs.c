@@ -3535,6 +3535,13 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 	assert(inode->nlinks);
 	assert(BPFS_S_ISREG(inode->mode));
 
+	if (off >= inode->root.nbytes)
+	{
+		bpfs_abort();
+		xcall(fuse_reply_buf(req, NULL, 0));
+		return;
+	}
+
 	size = MIN(size, inode->root.nbytes - off);
 	first_blockoff = off / BPFS_BLOCK_SIZE;
 	last_blockoff = (off + size) ? (off + size - 1) / BPFS_BLOCK_SIZE : 0;
