@@ -2411,6 +2411,7 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 			child_valid = 0;
 		}
 
+		xcall(indirect_cow_parent_push(blockno));
 		if (height > 1)
 			r = truncate_block_zero_indir(child_blockno, child_begin,
 			                              child_end, child_valid, height - 1,
@@ -2419,6 +2420,7 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 			r = truncate_block_zero_leaf(child_blockno, child_begin,
 			                             child_end, child_valid,
 			                             &child_blockno);
+		indirect_cow_parent_pop(blockno);
 		if (r < 0)
 			return r;
 
@@ -2475,6 +2477,7 @@ int truncate_block_zero(struct bpfs_tree_root *root,
 	else
 	{
 		int r;
+		xcall(indirect_cow_parent_push(new_blockno));
 		if (!tree_root_height(root))
 			r = truncate_block_zero_leaf(child_blockno, begin, end, valid,
 			                             &child_blockno);
@@ -2482,6 +2485,7 @@ int truncate_block_zero(struct bpfs_tree_root *root,
 			r = truncate_block_zero_indir(child_blockno, begin, end, valid,
 			                              tree_root_height(root), max_nblocks,
 			                              &child_blockno);
+		indirect_cow_parent_pop(new_blockno);
 		if (r < 0)
 			return r;
 	}
