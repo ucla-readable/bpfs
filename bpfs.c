@@ -2834,6 +2834,8 @@ static int do_unlink_inode(uint64_t ino, struct bpfs_time time_now)
 		// This was the last dirent for this inode. Free the inode:
 		truncate_block_free(&inode->root, 0);
 		free_inode(ino);
+		if (BPFS_S_ISDIR(inode->mode) && dcache_has_dir(ino))
+			dcache_rem_dir(ino);
 	}
 	else
 	{
