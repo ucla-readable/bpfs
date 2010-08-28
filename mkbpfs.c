@@ -3,6 +3,7 @@
  * of the GNU GPL. See the file LICENSE for details. */
 
 #include "mkbpfs.h"
+#include "bpfs.h"
 #include "bpfs_structs.h"
 #include "util.h"
 
@@ -31,7 +32,7 @@
  * 7: "/".data[0]
  */
 
-static char* get_block(char *bpram, struct bpfs_super *super, uint64_t no)
+static char* mk_get_block(char *bpram, struct bpfs_super *super, uint64_t no)
 {
 	assert(no != BPFS_BLOCKNO_INVALID);
 	assert(no <= super->nblocks);
@@ -40,7 +41,7 @@ static char* get_block(char *bpram, struct bpfs_super *super, uint64_t no)
 	return bpram + (no - 1) * BPFS_BLOCK_SIZE;
 }
 
-static uint64_t alloc_block(struct bpfs_super *super)
+static uint64_t mk_alloc_block(struct bpfs_super *super)
 {
 	static uint64_t next_blockno = BPFS_BLOCKNO_FIRST_ALLOC - 1;
 	static_assert(BPFS_BLOCKNO_INVALID == 0);
@@ -49,7 +50,7 @@ static uint64_t alloc_block(struct bpfs_super *super)
 	return (next_blockno++) + 1;
 }
 
-#define GET_BLOCK(blockno) get_block(bpram, super, blockno)
+#define MK_GET_BLOCK(blockno) mk_get_block(bpram, super, blockno)
 
 int mkbpfs(char *bpram, size_t bpram_size)
 {
@@ -72,7 +73,7 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	static_assert(sizeof(uuid_t) == sizeof(super->uuid));
 	uuid_generate(super->uuid);
 	super->nblocks = ROUNDDOWN64(bpram_size / BPFS_BLOCK_SIZE, NBLOCKS_MODULUS);
-	super->inode_root_addr = alloc_block(super);
+	super->inode_root_addr = mk_alloc_block(super);
 	super->inode_root_addr_2 = super->inode_root_addr; // not required for SCSP
 	super->commit_mode = BPFS_COMMIT_SCSP;
 	super->ephemeral_valid = 1;
@@ -92,31 +93,30 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	super_2 = super + 1;
 	*super_2 = *super; // not required for SCSP
 
-	inodes_root = (struct bpfs_tree_root*) GET_BLOCK(super->inode_root_addr);
+	inodes_root = (struct bpfs_tree_root*) MK_GET_BLOCK(super->inode_root_addr);
 	static_assert(INODES_NBLOCKS <= BPFS_BLOCKNOS_PER_INDIR);
 	inodes_root->ha.height = 1;
-	inodes_root->ha.addr = alloc_block(super);
+	inodes_root->ha.addr = mk_alloc_block(super);
 	inodes_root->nbytes = INODES_NBLOCKS * BPFS_BLOCK_SIZE;
 
-	inodes_indir = (struct bpfs_indir_block*) GET_BLOCK(inodes_root->ha.addr);
+	inodes_indir = (struct bpfs_indir_block*) MK_GET_BLOCK(inodes_root->ha.addr);
 
 	for (i = 0; i < INODES_NBLOCKS; i++)
 	{
 #if APPEASE_VALGRIND
 		int j;
 #endif
-		inodes_indir->addr[i] = alloc_block(super);
-		inodes = (struct bpfs_inode*) GET_BLOCK(inodes_indir->addr[i]);
+		inodes_indir->addr[i] = mk_alloc_block(super);
+		inodes = (struct bpfs_inode*) MK_GET_BLOCK(inodes_indir->addr[i]);
 
 #if APPEASE_VALGRIND
-		static_assert(BPFS_BLOCKNO_INVALID == 0);
 		// init the generation field. not required, but appeases valgrind.
 		for (j = 0; j + sizeof(struct bpfs_inode) <= BPFS_BLOCK_SIZE; j += sizeof(struct bpfs_inode))
 			inodes[j].generation = 0;
 #endif
 	}
 
-	inodes = (struct bpfs_inode*) GET_BLOCK(inodes_indir->addr[0]);
+	inodes = (struct bpfs_inode*) MK_GET_BLOCK(inodes_indir->addr[0]);
 
 	root_inode = &inodes[0];
 	root_inode->generation = 1;
@@ -127,12 +127,12 @@ int mkbpfs(char *bpram, size_t bpram_size)
 	root_inode->nlinks = 2;
 	root_inode->flags = 0;
 	root_inode->root.ha.height = 0;
-	root_inode->root.ha.addr = alloc_block(super);
+	root_inode->root.ha.addr = mk_alloc_block(super);
 	root_inode->root.nbytes = BPFS_BLOCK_SIZE;
 	root_inode->mtime = root_inode->ctime = root_inode->atime = BPFS_TIME_NOW();
 	memset(root_inode->pad, 0, sizeof(root_inode->pad));
 
-	root_dirent = (struct bpfs_dirent*) GET_BLOCK(root_inode->root.ha.addr);
+	root_dirent = (struct bpfs_dirent*) MK_GET_BLOCK(root_inode->root.ha.addr);
 	root_dirent->rec_len = 0;
 
 	super->magic = BPFS_FS_MAGIC;

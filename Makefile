@@ -37,19 +37,20 @@ bpfs.o: bpfs.c bpfs_structs.h bpfs.h crawler.h indirect_cow.h \
 	mkbpfs.h dcache.h util.h hash_map.h
 	$(CC) $(CFLAGS) `pkg-config --cflags fuse` -c -o $@ $<
 
-mkfs.bpfs.o: mkfs.bpfs.c mkbpfs.h bpfs_structs.h util.h
+mkfs.bpfs.o: mkfs.bpfs.c mkbpfs.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-indirect_cow.o: indirect_cow.c indirect_cow.h bpfs.h bpfs_structs.h util.h
+indirect_cow.o: indirect_cow.c indirect_cow.h bpfs.h bpfs_structs.h util.h \
+	hash_map.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 crawler.o: crawler.c crawler.h bpfs.h bpfs_structs.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-mkbpfs.o: mkbpfs.c mkbpfs.h bpfs_structs.h util.h
+mkbpfs.o: mkbpfs.c mkbpfs.h bpfs.h bpfs_structs.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-dcache.o: dcache.c dcache.h
+dcache.o: dcache.c dcache.h hash_map.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 vector.o: vector.c vector.h
