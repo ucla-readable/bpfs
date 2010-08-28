@@ -239,6 +239,16 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 				indir = (struct bpfs_indir_block*) get_block(blockno);
 			}
 			indir->addr[no] = child_new_blockno;
+#if INDIRECT_COW
+			// Neccessary for plugging a file hole.
+			// There may be broader related problems, e.g, when increasing
+			// a tree's height?, but so far I've not noticed any breakage.
+			// Might alternatively or additionally consider supporting
+			// in cow_is_atomically_writable() (!block->orig_blkno -> false)
+			// and adding a required() call in/after cow_block_hole().
+			if (child_blockno == BPFS_INO_INVALID && block_freshly_alloced(blockno))
+				indirect_cow_block_required(blockno);
+#endif
 			if (SCSP_OPT_APPEND && only_invalid)
 				indirect_cow_block_direct(blockno, no * sizeof(*indir->addr),
 				                          sizeof(*indir->addr));
