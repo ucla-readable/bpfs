@@ -2370,7 +2370,9 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 
 #if COMMIT_MODE != MODE_BPFS
 	{
-		unsigned indir_valid = beginno * sizeof(*indir);
+		unsigned indir_valid = beginno * sizeof(indir->addr[0]);
+		if (!begin_aligned)
+			indir_valid += sizeof(indir->addr[0]);
 		blockno = cow_block(blockno, 0, 0, indir_valid);
 		if (blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
