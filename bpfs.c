@@ -1778,6 +1778,7 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 	assert(!(off % BPFS_DIRENT_ALIGN));
 	assert(off + min_hole_size <= end);
 	assert(!dirent->rec_len || dirent->rec_len >= min_hole_size);
+	assert(off + dirent->rec_len <= BPFS_BLOCK_SIZE);
 	assert(BPFS_BLOCK_SIZE - off >= min_hole_size);
 	// Not necessarily true for a dirent's first use:
 	// assert(dirent->ino == BPFS_INO_INVALID);
