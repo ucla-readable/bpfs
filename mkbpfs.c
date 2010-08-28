@@ -103,16 +103,23 @@ int mkbpfs(char *bpram, size_t bpram_size)
 
 	for (i = 0; i < INODES_NBLOCKS; i++)
 	{
-#if APPEASE_VALGRIND
+#if APPEASE_VALGRIND || DETECT_ZEROLINKS_WITH_LINKS
 		int j;
 #endif
 		inodes_indir->addr[i] = mk_alloc_block(super);
 		inodes = (struct bpfs_inode*) MK_GET_BLOCK(inodes_indir->addr[i]);
 
-#if APPEASE_VALGRIND
-		// init the generation field. not required, but appeases valgrind.
+#if APPEASE_VALGRIND || DETECT_ZEROLINKS_WITH_LINKS
 		for (j = 0; j + sizeof(struct bpfs_inode) <= BPFS_BLOCK_SIZE; j += sizeof(struct bpfs_inode))
+		{
+# if APPEASE_VALGRIND
+			// init the generation field. not required, but appeases valgrind.
 			inodes[j].generation = 0;
+# endif
+# if DETECT_ZEROLINKS_WITH_LINKS
+			inodes[j].nlinks = 0;
+# endif
+		}
 #endif
 	}
 

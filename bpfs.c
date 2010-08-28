@@ -888,17 +888,24 @@ static int callback_init_inodes(uint64_t blockoff, char *block,
                                 uint64_t crawl_start, enum commit commit,
                                 void *user, uint64_t *blockno)
 {
-#if APPEASE_VALGRIND
-	// init the generation field. not required, but appeases valgrind.
+#if APPEASE_VALGRIND || DETECT_ZEROLINKS_WITH_LINKS
 	assert(!(off % sizeof(struct bpfs_inode)));
 	for (; off + sizeof(struct bpfs_inode) <= size; off += sizeof(struct bpfs_inode))
 	{
 		struct bpfs_inode *inode = (struct bpfs_inode*) (block + off);
+# if APPEASE_VALGRIND
+		// init the generation field. not required, but appeases valgrind.
 		inode->generation = 0;
+# endif
+# if DETECT_ZEROLINKS_WITH_LINKS
+		inode->nlinks = 0;
+# endif
 	}
 #endif
 	return 0;
 }
+
+static struct bpfs_inode* get_inode(uint64_t ino);
 
 static uint64_t alloc_inode(void)
 {
@@ -916,6 +923,9 @@ static uint64_t alloc_inode(void)
 		assert(no != inode_alloc.bitmap.ntotal);
 	}
 	static_assert(BPFS_INO_INVALID == 0);
+#if DETECT_ZEROLINKS_WITH_LINKS
+	assert(!get_inode(no + 1)->nlinks);
+#endif
 	DIprintf("%s() -> ino %" PRIu64 "\n", __FUNCTION__, no + 1);
 	return no + 1;
 }
@@ -1046,6 +1056,7 @@ static int bpfs_stat(fuse_ino_t ino, struct stat *stbuf)
 	struct bpfs_inode *inode = get_inode(ino);
 	if (!inode)
 		return -ENOENT;
+	assert(inode->nlinks);
 	memset(stbuf, 0, sizeof(stbuf));
 	/* stbuf->st_dev */
 	stbuf->st_ino = ino;
@@ -1734,6 +1745,7 @@ static struct bpfs_dirent* get_dirent(uint64_t parent_ino, uint64_t dirent_off)
 	int r;
 
 	assert(get_inode(parent_ino));
+	assert(get_inode(parent_ino)->nlinks);
 	assert(dirent_off + BPFS_DIRENT_MIN_LEN <= get_inode(parent_ino)->root.nbytes);
 
 	r = crawl_data(parent_ino, dirent_off, 1, COMMIT_NONE,
@@ -2016,6 +2028,9 @@ static int callback_init_inode(char *block, unsigned off,
 	inode->mode = f2b_mode(ciid->mode);
 	inode->uid = ciid->ctx->uid;
 	inode->gid = ciid->ctx->gid;
+#if DETECT_ZEROLINKS_WITH_LINKS
+	assert(!inode->nlinks);
+#endif
 	// inode->nlinks = 1; // set by caller
 	inode->flags = 0;
 	// ha_set(&inode->root.ha, 0, BPFS_BLOCKNO_INVALID); // set by caller
@@ -2083,6 +2098,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 
 	if (!get_inode(parent_ino))
 		return -ENOENT;
+	assert(get_inode(parent_ino)->nlinks >= 2);
 	assert(BPFS_S_ISDIR(get_inode(parent_ino)->mode));
 
 	if (!find_dirent(parent_ino, name, NULL))
@@ -2240,6 +2256,8 @@ static void fuse_statfs(fuse_req_t req, fuse_ino_t ino)
 
 static void fill_fuse_entry(const struct bpfs_dirent *dirent, struct fuse_entry_param *e)
 {
+	assert(get_inode(dirent->ino)->nlinks);
+
 	memset(e, 0, sizeof(e));
 	e->ino = dirent->ino;
 	e->generation = get_inode(dirent->ino)->generation;
@@ -2637,6 +2655,8 @@ static void fuse_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 	assert(!(to_set & ~supported));
 	to_set &= supported;
 
+	assert(get_inode(ino)->nlinks);
+
 	r = crawl_inode(ino, COMMIT_ATOMIC, callback_setattr, &csd);
 	if (r < 0)
 	{
@@ -2659,6 +2679,7 @@ static void fuse_readlink(fuse_req_t req, fuse_ino_t ino)
 	assert(BPFS_S_ISLNK(inode->mode));
 	assert(inode->root.nbytes);
 	assert(inode->root.nbytes <= BPFS_BLOCK_SIZE);
+	assert(inode->nlinks);
 
 	bpfs_commit();
 	xcall(fuse_reply_readlink(req, get_block(tree_root_addr(&inode->root))));
@@ -2789,6 +2810,17 @@ static int do_unlink_inode(uint64_t ino, struct bpfs_time time_now)
 	if (inode->nlinks == 1 || BPFS_S_ISDIR(inode->mode))
 	{
 		assert(!BPFS_S_ISDIR(inode->mode) || inode->nlinks == 2);
+
+#if DETECT_ZEROLINKS_WITH_LINKS
+		if (BPFS_S_ISDIR(inode->mode))
+			nlinks_delta = -2;
+		r = crawl_inode(ino, COMMIT_ATOMIC, callback_change_nlinks,
+		                &nlinks_delta);
+		if (r < 0)
+			return r;
+		assert(!get_inode(ino)->nlinks);
+#endif
+
 		// This was the last dirent for this inode. Free the inode:
 		truncate_block_free(&inode->root, 0);
 		free_inode(ino);
@@ -2815,6 +2847,8 @@ static int do_unlink(uint64_t parent_ino, const struct mdirent *md)
 		{false, md->off, BPFS_INO_INVALID,
 		 BPFS_S_ISDIR(get_inode(md->ino)->mode)};
 	int r;
+
+	assert(get_inode(md->ino)->nlinks);
 
 	r = crawl_inode(parent_ino, COMMIT_ATOMIC, callback_addrem_dirent, &cadd);
 	if (r < 0)
@@ -2981,6 +3015,7 @@ static void fuse_rename(fuse_req_t req,
 	r = find_dirent(src_parent_ino, src_name, &src_md);
 	if (r < 0)
 		goto abort;
+	assert(get_inode(src_md->ino)->nlinks);
 
 	r = find_dirent(dst_parent_ino, dst_name, &edst_md);
 	if (r < 0 && r != -ENOENT)
@@ -2989,6 +3024,8 @@ static void fuse_rename(fuse_req_t req,
 
 	if (dst_existed)
 	{
+		assert(get_inode(edst_md->ino)->nlinks);
+
 		unlinked_ino = edst_md->ino;
 		// TODO: check that types match?
 		dst_off = edst_md->off;
@@ -3122,6 +3159,7 @@ static void fuse_link(fuse_req_t req, fuse_ino_t fuse_ino,
 
 	assert(get_inode(ino));
 	assert(!BPFS_S_ISDIR(get_inode(ino)->mode));
+	assert(get_inode(ino)->nlinks);
 	if (!(get_inode(ino)->nlinks + 1))
 	{
 		r = -EMLINK;
@@ -3133,6 +3171,7 @@ static void fuse_link(fuse_req_t req, fuse_ino_t fuse_ino,
 		r = -ENOENT;
 		goto abort;
 	}
+	assert(get_inode(parent_ino)->nlinks);
 	assert(BPFS_S_ISDIR(get_inode(parent_ino)->mode));
 
 	if (!find_dirent(parent_ino, name, NULL))
@@ -3183,6 +3222,8 @@ static void fuse_opendir(fuse_req_t req, fuse_ino_t ino,
                          struct fuse_file_info *fi)
 {
 	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
+
+	assert(get_inode(ino)->nlinks);
 
 	fi->fh = ino;
 
@@ -3291,6 +3332,8 @@ static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
 	Dprintf("%s(ino = %lu, off = %" PRId64 ")\n",
 	        __FUNCTION__, ino, off);
 
+	assert(inode->nlinks);
+
 	if (!inode)
 	{
 		r = -EINVAL;
@@ -3369,6 +3412,9 @@ static int sync_inode(uint64_t ino, int datasync)
 	printf("fsync(ino = %" PRIu64 ", datasync = %d): not yet implemented\n",
 	       ino, datasync);
 #endif
+
+	assert(get_inode(ino)->nlinks);
+
 	return 0;
 }
 
@@ -3429,6 +3475,7 @@ static void fuse_open(fuse_req_t req, fuse_ino_t ino,
 		xcall(fuse_reply_err(req, EINVAL));
 		return;
 	}
+	assert(inode->nlinks);
 	if (BPFS_S_ISDIR(inode->mode))
 	{
 		bpfs_abort();
@@ -3473,6 +3520,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 		r = -ENOENT;
 		goto abort;
 	}
+	assert(inode->nlinks);
 	assert(BPFS_S_ISREG(inode->mode));
 
 	size = MIN(size, inode->root.nbytes - off);
@@ -3576,6 +3624,8 @@ static void fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 
 	Dprintf("%s(ino = %lu, off = %" PRId64 ", size = %zu)\n",
 	        __FUNCTION__, ino, off, size);
+
+	assert(get_inode(ino)->nlinks);
 
 	r = crawl_data(ino, off, size, COMMIT_ATOMIC, callback_write, buf_unconst);
 	if (r >= 0)
