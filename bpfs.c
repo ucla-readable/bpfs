@@ -2371,7 +2371,8 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 #if COMMIT_MODE != MODE_BPFS
 	{
 		unsigned indir_valid = beginno * sizeof(*indir);
-		if ((blockno = cow_block(blockno, 0, 0, indir_valid)) == BPFS_BLOCKNO_INVALID)
+		blockno = cow_block(blockno, 0, 0, indir_valid);
+		if (blockno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 		indirect_cow_block_required(blockno);
 		indir = (struct bpfs_indir_block*) get_block(blockno);
@@ -3564,7 +3565,6 @@ static int callback_write(uint64_t blockoff, char *block,
 	      || (COMMIT_MODE == MODE_BPFS
 	          && (commit == COMMIT_ATOMIC
 	              && (can_atomic_write(off, size) || off >= valid)))))
-
 	{
 		uint64_t newno = cow_block(*new_blockno, off, size, valid);
 		if (newno == BPFS_BLOCKNO_INVALID)
