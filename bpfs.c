@@ -80,6 +80,14 @@
 # define DBprintf(x...) do {} while(0)
 #endif
 
+
+#define DEBUG_INODES (0 && !defined(NDEBUG))
+#if DEBUG_INODES
+# define DIprintf(x...) fprintf(stderr, x)
+#else
+# define DIprintf(x...) do {} while(0)
+#endif
+
 #if DETECT_NONCOW_WRITES_SP
 # define PROT_INUSE_OLD PROT_READ
 #else
@@ -908,6 +916,7 @@ static uint64_t alloc_inode(void)
 		assert(no != inode_alloc.bitmap.ntotal);
 	}
 	static_assert(BPFS_INO_INVALID == 0);
+	DIprintf("%s() -> ino %" PRIu64 "\n", __FUNCTION__, no + 1);
 	return no + 1;
 }
 
@@ -921,6 +930,7 @@ static bool set_inode(uint64_t ino)
 static void free_inode(uint64_t ino)
 {
 	assert(ino != BPFS_INO_INVALID);
+	DIprintf("%s(ino = %" PRIu64 ")\n", __FUNCTION__, ino);
 	static_assert(BPFS_INO_INVALID == 0);
 	bitmap_free(&inode_alloc.bitmap, ino - 1);
 }
