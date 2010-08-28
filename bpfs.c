@@ -3064,6 +3064,8 @@ static void fuse_rename(fuse_req_t req,
 	                 COMMIT_ATOMIC);
 	if (r < 0)
 		goto abort;
+	assert(get_dirent(src_parent_ino, src_md->off)->ino == BPFS_INO_INVALID);
+	assert(get_dirent(dst_parent_ino, dst_off)->ino == src_md->ino);
 
 	r = crawl_inode(dst_parent_ino, COMMIT_ATOMIC, callback_set_cmtime,
 	                &time_now);
