@@ -699,7 +699,8 @@ static int callback_crawl_data_2(uint64_t blockoff, char *block,
 		{
 			assert(ccd2d->d[0].off < ccd2d->d[1].off);
 			return crawl_tree(&inode->root, ccd2d->d[0].off,
-			                  ccd2d->d[1].off + ccd2d->d[1].size, commit,
+			                  ccd2d->d[1].off - ccd2d->d[0].off
+			                  + ccd2d->d[1].size, commit,
 			                  callback_crawl_data_2_tree, ccd2d, blockno);
 		}
 		else
