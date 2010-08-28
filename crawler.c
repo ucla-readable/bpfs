@@ -685,7 +685,6 @@ static int callback_crawl_data_2(uint64_t blockoff, char *block,
                                  void *ccd2d_void, uint64_t *blockno)
 {
 	struct callback_crawl_data_2_data *ccd2d = (struct callback_crawl_data_2_data*) ccd2d_void;
-	struct bpfs_inode *inode = (struct bpfs_inode*) (block + off);
 	uint64_t first_offset = blockoff * BPFS_BLOCK_SIZE + off;
 	uint64_t last_offset = first_offset + size - sizeof(struct bpfs_inode);
 	unsigned mask;
@@ -695,6 +694,7 @@ static int callback_crawl_data_2(uint64_t blockoff, char *block,
 
 	if (mask == 3)
 	{
+		struct bpfs_inode *inode = (struct bpfs_inode*) (block + off);
 		if (ccd2d->d[0].ino == ccd2d->d[1].ino)
 		{
 			assert(ccd2d->d[0].off < ccd2d->d[1].off);
@@ -734,7 +734,16 @@ static int callback_crawl_data_2(uint64_t blockoff, char *block,
 	}
 	else if (mask)
 	{
+		struct bpfs_inode *inode;
 		struct ccd2dd *d = &ccd2d->d[mask >> 1];
+		if (mask == 1)
+			inode = (struct bpfs_inode*) (block + off);
+		else
+		{
+			assert(mask == 2);
+			inode = (struct bpfs_inode*)
+				(block + off + size - sizeof(struct bpfs_inode));
+		}
 		assert(commit == COMMIT_COPY);
 		return crawl_tree(&inode->root, d->off, d->size, commit,
 		                  d->callback, d->user, blockno);
