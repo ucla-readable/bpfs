@@ -2380,8 +2380,14 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 #endif
 
 	for (no = beginno + 1; no < endno; no++)
+	{
+#if APPEASE_VALGRIND
+		indir->addr[no] = BPFS_BLOCKNO_INVALID;
+#else
 		if (indir->addr[no] != BPFS_BLOCKNO_INVALID)
 			indir->addr[no] = BPFS_BLOCKNO_INVALID;
+#endif
+	}
 
 	if (begin_aligned)
 		indir->addr[beginno] = BPFS_BLOCKNO_INVALID;
