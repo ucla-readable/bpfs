@@ -326,6 +326,8 @@ static bool cow_is_atomically_writable(const struct block *block,
 	unsigned off;
 
 	assert(!!atomic_new == !!atomic_off);
+	assert(block_0);
+	assert(block_1);
 
 	// BPFS_BLOCK_SIZE will indicate no difference
 	if (atomic_off)
@@ -407,7 +409,7 @@ void indirect_cow_commit(void)
 		assert(child || block->required);
 		if (child)
 		{
-			assert(child && !child->child_cow_next);
+			assert(!child->child_cow_next);
 			if (!cow_is_atomically_writable(child, NULL, NULL))
 				break;
 		}
