@@ -76,8 +76,6 @@
 - optimize cows that are made (ie cow and then overwrite some blocks)
 
 - add benchmarks and measurement tools
-	- apache build: all modes: timestamp out of range, uses 2514-05-29
-	  example: make[4]: thread_rwlock.lo: Timestamp out of range; substituting 2514-05-29 18:53:03.999999999
 	- more benchmarks to contrast performance between bpfs and other fses?
 	- more macro/real-world benchmarks that involve durability
 		- how should we evaluate disk sync costs? #bytes written.
