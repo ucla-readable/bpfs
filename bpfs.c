@@ -1069,11 +1069,11 @@ static int bpfs_stat(fuse_ino_t ino, struct stat *stbuf)
 	stbuf->st_blksize = BPFS_BLOCK_SIZE;
 	stbuf->st_blocks = tree_nblocks(&inode->root) * BPFS_BLOCK_SIZE / 512;
 	stbuf->st_atime = inode->atime.sec;
-	/* stbuf->st_atime_nsec */
+	stbuf->st_atim.tv_nsec = 0; // TODO: read nsec from inode
 	stbuf->st_mtime = inode->mtime.sec;
-	/* stbuf->st_mtime_nsec */
+	stbuf->st_mtim.tv_nsec = 0; // TODO: read nsec from inode
 	stbuf->st_ctime = inode->ctime.sec;
-	/* stbuf->st_ctime_nsec */
+	stbuf->st_ctim.tv_nsec = 0; // TODO: read nsec from inode
 	return 0;
 }
 
