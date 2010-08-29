@@ -22,8 +22,9 @@
 #define SCSP_OPT_TIME (1 && COMMIT_MODE == MODE_SCSP)
 
 #define APPEASE_VALGRIND 0
-// Detect when an inode is used that should no longer be linked into any dir
-#define DETECT_ZEROLINKS_WITH_LINKS 1
+// Detect when an inode is used that should no longer be linked into any dir.
+// NOTE: This causes additional writes.
+#define DETECT_ZEROLINKS_WITH_LINKS (0 && !defined(NDEBUG))
 
 #define SCSP_OPT_DIRECT (SCSP_OPT_APPEND || SCSP_OPT_TIME)
 #define INDIRECT_COW (COMMIT_MODE == MODE_SCSP)
