@@ -484,13 +484,16 @@ class filesystem_bpfs:
         os.rmdir(self.mnt)
     def format(self):
         subprocess.check_call(['./mkfs.bpfs', self.img.name], close_fds=True)
-    def mount(self, pinfile=None):
+    def mount(self, pinfile=None, count=False):
         env = None
         if pinfile:
             env = os.environ
             env['PINOPTS'] = '-b true -o ' + pinfile
-        self.proc = subprocess.Popen(['./bench/bpramcount',
-                                      '-f', self.img.name, self.mnt],
+        bin = './bpfs'
+        if count:
+            bin = './bench/bpramcount'
+        self._count = count
+        self.proc = subprocess.Popen([bin, '-f', self.img.name, self.mnt],
                                       stdout=subprocess.PIPE,
                                       stderr=subprocess.STDOUT,
                                       close_fds=True,
@@ -509,6 +512,8 @@ class filesystem_bpfs:
         subprocess.check_call(['fusermount', '-u', self.mnt], close_fds=True)
         output = self.proc.communicate()[0]
         self.proc = None
+        if not self._count:
+            return 0
         for line in output.splitlines():
             if line.startswith('pin: ') and line.endswith(' bytes written to BPRAM'):
                 bytes_written = int(line.split()[1])
@@ -547,7 +552,7 @@ class filesystem_kernel:
             if fields[2] == dev_name:
                 return int(fields[9]) * 512
         raise NameError('Device ' + dev_name + ' not found in /proc/diskstats')
-    def mount(self, pinfile=None):
+    def mount(self, pinfile=None, count=False):
         cmd = ['sudo', 'mount', self.img, self.mnt]
         if self.fs_mode and self.fs_name in ['ext3', 'ext4']:
                 cmd.append('-o')
@@ -584,7 +589,7 @@ def run(fs, benches, profile):
             b.prepare()
             fs.unmount()
 
-        fs.mount(pinfile=pinfile)
+        fs.mount(pinfile=pinfile, count=True)
         b.run()
         bytes = fs.unmount()
 
