@@ -72,30 +72,33 @@
 - replace dcache bits for find_dirent() with persistent hashes in dirs?
 
 * current work
+- WC vs. WT for memory throughput benchmark
 - explain bytes written differences
 - optimize cows that are made (ie cow and then overwrite some blocks)
-
 - add benchmarks and measurement tools
-	- more benchmarks to contrast performance between bpfs and other fses?
+	- measure layout choices? e.g., to not store "..", no resource bitmaps, ...
+	- postmark: run with smaller size of ram to bytes written ratio?
+	- postmark: make sure runs are deterministic
+	- build_apache: which app(s) make the small overwrites? could they be improved?
 	- more macro/real-world benchmarks that involve durability
 		- how should we evaluate disk sync costs? #bytes written.
-	- benchmark ext3/4 with data journaling, too
+		- mail delivery? (or, postfix suffices?)
+		- dbt2
 	- microbenchmark(s) for each syscall?
+	- add macrobenchmarks: a good/respected one
 		- truncate separate from unlink? write into a hole?
-	- add macrobenchmarks: postmark, untar, rm, and a good one
-		- don't need to use bpramcount for setup
 	- expand microbenchmark repetition to ~fill ext[34] journals?
-	- analyze contributions of optimizations
-		- break optimizations down into pieces
 	- use impressions?
-- add new interfaces?
+- add new VFS interfaces?
 	- sparse atomic write (like rename) (writev? in fuse-git?)
 	- perhaps more generally, write coalescing (but not necessarily atomic?)
 	- FUSE splice? (what will it do? larger atomic write?)
 	- do not update mtime on write/atime on read
 	- operations to take advantage of no seeks: move data between files, ?
+		- merge and split file at block granularity? fragmentation is ok.
 	- does single-ref/atomic write make block sharing impossible?
 		- not at all. but unsharing takes more writes than were there no shr. (eg keep an on-disk or in-memory count for each block.)
+	- delete subtree. bytes written will be constant (zero one dirent.ino field)
 - sort of feel that it is too much of a toy/not under realistic workloads.
 	real workloads/hardware may make the performance benefits inconsequential
 	or negative.
