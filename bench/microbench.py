@@ -431,11 +431,42 @@ class benchmarks:
 
     @benchmacro
     class tarx:
-        free_space = 1024
+        free_space = 512
         def run(self):
             tar_file = 'bench/linux-2.6.15.tar'
             subprocess.check_call(['tar', '-xf', tar_file, '-C', self.mnt],
                                   close_fds=True)
+
+    @benchmacro
+    class delete:
+        free_space = 512
+        def prepare(self):
+            tar_file = 'bench/linux-2.6.15.tar'
+            subprocess.check_call(['tar', '-xf', tar_file, '-C', self.mnt],
+                                  close_fds=True)
+        def run(self):
+            subprocess.check_call(['rm', '-rf',
+                                   os.path.join(self.mnt, 'linux-2.6.15')],
+                                   close_fds=True)
+
+    @benchmacro
+    class build_apache:
+        free_space = 512
+        def run(self):
+            tar_file = 'bench/httpd-2.0.63.tar.gz'
+            path = os.path.join(self.mnt, 'httpd-2.0.63')
+            devnull = open('/dev/null', 'rw')
+            subprocess.check_call(['tar', '-xf', tar_file, '-C', self.mnt],
+                                  close_fds=True)
+            subprocess.check_call([os.path.join(path, 'configure')],
+                                  stdout=devnull, stderr=devnull,
+                                  cwd=path, close_fds=True)
+            # TODO: why does make exit with an error with devnull?
+            # 'make -j8 &>/dev/null' does not.
+            subprocess.check_call(['make', '-j8'],
+#                                  stdout=devnull, stderr=devnull,
+                                  cwd=path, close_fds=True)
+            devnull.close()
 
 
 class filesystem_bpfs:
