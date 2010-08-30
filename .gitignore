@@ -4,5 +4,7 @@ pwrite
 *.o
 tags
 TAGS
-bpram
 mnt
+bench/postmark-1_5
+bench/linux-2.6.15.tar
+bench/httpd-2.0.63.tar.gz

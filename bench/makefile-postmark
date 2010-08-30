@@ -1,0 +1,9 @@
+.PHONY: all clean
+
+postmark-1_5: postmark-1_5.c
+	$(CC) -O2 $(CFLAGS) -o $@ $^
+
+all: postmark-1_5
+
+clean:
+	rm -f postmark-1_5
