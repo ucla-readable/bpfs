@@ -74,11 +74,13 @@
 * current work
 - WC vs. WT for memory throughput benchmark
 - explain bytes written differences
+- move time updates to before modifications?
 - optimize cows that are made (ie cow and then overwrite some blocks)
 - add benchmarks and measurement tools
 	- measure layout choices? e.g., to not store "..", no resource bitmaps, ...
 	- postmark: run with smaller size of ram to bytes written ratio?
-	- postmark: make sure runs are deterministic
+	- postmark: make runs deterministic
+	- bonnie++: not deterministic, but variance seems <0.1%
 	- build_apache: which app(s) make the small overwrites? could they be improved?
 	- more macro/real-world benchmarks that involve durability
 		- how should we evaluate disk sync costs? #bytes written.
