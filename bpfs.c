@@ -406,7 +406,8 @@ static bool bitmap_ensure_set(struct bitmap *bitmap, uint64_t no)
 	assert(no < bitmap->ntotal);
 	was_set = *word & (1 << (no % 8));
 	*word |= (1 << (no % 8));
-	bitmap->nfree--;
+	if (!was_set)
+		bitmap->nfree--;
 	return was_set;
 }
 
