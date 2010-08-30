@@ -468,6 +468,29 @@ class benchmarks:
                                   cwd=path, close_fds=True)
             devnull.close()
 
+    @benchmacro
+    class bonnie:
+        free_space = 2 * 1024
+        cmd = ['bonnie++', '-d', self.mnt, '-r', '512']
+        def run(self):
+            devnull = open('/dev/null', 'rw')
+            subprocess.check_call(self.cmd,
+                                  stdout=devnull, stderr=devnull,
+                                  close_fds=True)
+            devnull.close()
+
+    @benchmacro
+    class bonnie_sync:
+        free_space = 2 * 1024
+        def run(self):
+            cmd = list(bonnie.cmd)
+            cmd.append('-b')
+            devnull = open('/dev/null', 'rw')
+            subprocess.check_call(cmd,
+                                  stdout=devnull, stderr=devnull,
+                                  close_fds=True)
+            devnull.close()
+
 
 class filesystem_bpfs:
     _mount_overheads = { 'BPFS': 1 } # the valid field
