@@ -35,6 +35,12 @@ class benchmarks:
             if not hasattr(obj, 'benchmacro'):
                 yield (name, obj)
 
+    @staticmethod
+    def macro():
+        for (name, obj) in benchmarks.all():
+            if hasattr(obj, 'benchmacro'):
+                yield (name, obj)
+
     class empty:
         opt = 0
         def run(self):
@@ -634,11 +640,12 @@ def run(fs, benches, profile):
         sys.stdout.flush()
 
 def usage():
-    print 'Usage: ' + sys.argv[0] + ' [-h|--help] [-t FS -d DEV] [-p] [BENCHMARK ...]'
+    print 'Usage: ' + sys.argv[0] + ' [-h|--help] [-t FS [-d DEV]] [-p] [BENCHMARK ...]'
     print '\t-t FS: use file system FS (e.g., bpfs or ext4)'
     print '\t-d DEV: use DEV for (non-bpfs) file system backing'
     print '\t-p: profile each run (bpfs only)'
-    print '\tSpecifying no benchmarks runs all benchmarks'
+    print '\tThree meta benchmark names exist: all, micro, and macro'
+    print '\tSpecifying no benchmarks runs all micro benchmarks'
 
 def main():
     try:
@@ -667,10 +674,18 @@ def main():
     if not bench_names:
         benches = list(benchmarks.micro())
     else:
-        bench_names = set(bench_names)
-        for name, obj in inspect.getmembers(benchmarks):
-            if inspect.isclass(obj) and name in bench_names:
-                benches.append((name, obj))
+        all_benches = dict(benchmarks.all())
+        for name in bench_names:
+            if name in all_benches:
+                benches.append((name, all_benches[name]))
+            elif name == 'all':
+                benches.extend(benchmarks.all())
+            elif name == 'micro':
+                benches.extend(benchmarks.micro())
+            elif name == 'macro':
+                benches.extend(benchmarks.macro())
+            else:
+                print '"%s" is not a benchmark' % name
 
     if fs_name == 'bpfs':
         bpfs_size = 32
