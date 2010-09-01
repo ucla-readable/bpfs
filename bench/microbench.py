@@ -471,8 +471,8 @@ class benchmarks:
     @benchmacro
     class bonnie:
         free_space = 2 * 1024
-        cmd = ['bonnie++', '-d', self.mnt, '-r', '512']
         def run(self):
+            cmd = ['bonnie++', '-d', self.mnt, '-r', '512']
             devnull = open('/dev/null', 'rw')
             subprocess.check_call(self.cmd,
                                   stdout=devnull, stderr=devnull,
@@ -483,8 +483,7 @@ class benchmarks:
     class bonnie_sync:
         free_space = 2 * 1024
         def run(self):
-            cmd = list(bonnie.cmd)
-            cmd.append('-b')
+            cmd = ['bonnie++', '-d', self.mnt, '-r', '512', '-b']
             devnull = open('/dev/null', 'rw')
             subprocess.check_call(cmd,
                                   stdout=devnull, stderr=devnull,
