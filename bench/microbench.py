@@ -422,7 +422,7 @@ class benchmarks:
 
     @benchmacro
     class postmark:
-        free_space = 2 * 1024
+        free_space = 512
         def run(self):
             config = tempfile.NamedTemporaryFile()
             config.write('set location ' + self.mnt + '\n')
