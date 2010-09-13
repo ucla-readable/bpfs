@@ -91,16 +91,6 @@
 		- truncate separate from unlink? write into a hole?
 	- expand microbenchmark repetition to ~fill ext[34] journals?
 	- use impressions?
-- add new VFS interfaces?
-	- sparse atomic write (like rename) (writev? in fuse-git?)
-	- perhaps more generally, write coalescing (but not necessarily atomic?)
-	- FUSE splice? (what will it do? larger atomic write?)
-	- do not update mtime on write/atime on read
-	- operations to take advantage of no seeks: move data between files, ?
-		- merge and split file at block granularity? fragmentation is ok.
-	- does single-ref/atomic write make block sharing impossible?
-		- not at all. but unsharing takes more writes than were there no shr. (eg keep an on-disk or in-memory count for each block.)
-	- delete subtree. bytes written will be constant (zero one dirent.ino field)
 - sort of feel that it is too much of a toy/not under realistic workloads.
 	real workloads/hardware may make the performance benefits inconsequential
 	or negative.
