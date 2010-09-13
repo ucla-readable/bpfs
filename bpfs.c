@@ -741,6 +741,9 @@ static bool block_is_alloced(uint64_t blockno)
 //
 // block utility functions
 
+static uint64_t cow_nbytes;
+static uint64_t cow_nblocks;
+
 uint64_t cow_block(uint64_t old_blockno,
                    unsigned off, unsigned size, unsigned valid)
 {
@@ -775,8 +778,14 @@ uint64_t cow_block(uint64_t old_blockno,
 	old_block = get_block(old_blockno);
 	new_block = get_block(new_blockno);
 	memcpy(new_block, old_block, off);
+	cow_nbytes += off;
 	if (end < valid)
+	{
 		memcpy(new_block + end, old_block + end, valid - end);
+		cow_nbytes += valid - end;
+	}
+	if (off || end < valid)
+		cow_nblocks++;
 	free_block(old_blockno);
 	return new_blockno;
 }
@@ -831,6 +840,8 @@ uint64_t cow_block_entire(uint64_t old_blockno)
 	old_block = get_block(old_blockno);
 	new_block = get_block(new_blockno);
 	memcpy(new_block, old_block, BPFS_BLOCK_SIZE);
+	cow_nbytes += BPFS_BLOCK_SIZE;
+	cow_nblocks++;
 	free_block(old_blockno);
 	return new_blockno;
 }
@@ -4058,6 +4069,15 @@ int main(int argc, char **argv)
 	free(fargv);
 #endif
 	fargv = NULL;
+
+#if COMMIT_MODE == MODE_BPFS
+	printf("CoW: %" PRIu64 " bytes in %" PRIu64 " blocks\n",
+	       cow_nbytes, cow_nblocks);
+#else
+	// MODE_SP: doesn't count superblock
+	// MODE_SCSP: current implementation can un-CoW
+	printf("CoW: -1 bytes in -1 blocks\n");
+#endif
 
 	dcache_destroy();
 	destroy_allocations();

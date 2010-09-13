@@ -533,6 +533,7 @@ class filesystem_bpfs:
                 return
         raise NameError('Unable to start BPFS')
     def unmount(self):
+        cowed = (-1, -1)
         # 'fusermount -u' rather than self.proc.terminate() because the
         # second does not always get its signal into the process.
         # (In particular for benchmarks.rename_clober when running
@@ -543,11 +544,14 @@ class filesystem_bpfs:
         if not self._count:
             return 0
         for line in output.splitlines():
+            if line.startswith('CoW: ') and line.endswith(' blocks'):
+                linea = line.split()
+                cowed = (int(linea[1]), int(linea[4]))
             if line.startswith('pin: ') and line.endswith(' bytes written to BPRAM'):
                 bytes_written = int(line.split()[1])
                 if self._commit_mode in self._mount_overheads:
                     bytes_written -= self._mount_overheads[self._commit_mode]
-                return bytes_written
+                return (bytes_written, cowed)
         raise NameError('BPFS failed to exit correctly')
 
 class filesystem_kernel:
@@ -600,7 +604,7 @@ class filesystem_kernel:
         subprocess.check_call(['sudo', 'umount', self.mnt],
                               close_fds=True)
         self.mounted = False
-        return stop_bytes - self.start_bytes
+        return (stop_bytes - self.start_bytes, (-1, -1))
 
 def run(fs, benches, profile):
     for name, clz in benches:
@@ -619,7 +623,7 @@ def run(fs, benches, profile):
 
         fs.mount(pinfile=pinfile, count=True)
         b.run()
-        bytes = fs.unmount()
+        (bytes, (cow_bytes, cow_blocks)) = fs.unmount()
 
         sys.stdout.write(str(bytes) + ' bytes')
         if hasattr(b, 'opt'):
@@ -631,6 +635,8 @@ def run(fs, benches, profile):
                 factor = '%+.2f' % factor
                 sys.stdout.write(' = ' + factor + 'x')
             sys.stdout.write(')')
+        if cow_bytes != -1:
+            sys.stdout.write(' (cow: ' + str(cow_bytes) + ' bytes in ' + str(cow_blocks) + ' blocks)')
         print ''
         if profile:
             #subprocess.check_call(['cat'], stdin=open(pinfile))
