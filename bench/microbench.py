@@ -487,7 +487,7 @@ class benchmarks:
         def run(self):
             cmd = ['bonnie++', '-d', self.mnt, '-r', '1024']
             devnull = open('/dev/null', 'rw')
-            subprocess.check_call(self.cmd,
+            subprocess.check_call(cmd,
                                   stdout=devnull, stderr=devnull,
                                   close_fds=True)
             devnull.close()
