@@ -22,6 +22,20 @@ def benchmacro(bench_class):
     bench_class.benchmacro = True
     return bench_class
 
+class postmark:
+    free_space = 6 * 1024
+    def run(self):
+        config = tempfile.NamedTemporaryFile()
+        config.write('set location ' + self.mnt + '\n')
+        defaults = open(self.config)
+        for line in defaults:
+            config.write(line)
+        defaults.close()
+        config.flush()
+        config.seek(0)
+        subprocess.check_call(['bench/postmark-1_5'],
+                              stdin=config, close_fds=True)
+
 class benchmarks:
     @staticmethod
     def all():
@@ -421,19 +435,12 @@ class benchmarks:
             os.listdir(self.mnt)
 
     @benchmacro
-    class postmark:
-        free_space = 512
-        def run(self):
-            config = tempfile.NamedTemporaryFile()
-            config.write('set location ' + self.mnt + '\n')
-            defaults = open('bench/postmark.config')
-            for line in defaults:
-                config.write(line)
-            defaults.close()
-            config.flush()
-            config.seek(0)
-            subprocess.check_call(['bench/postmark-1_5'],
-                                  stdin=config, close_fds=True)
+    class postmark_small(postmark):
+        config = 'bench/postmark.small.config'
+
+    @benchmacro
+    class postmark_large(postmark):
+        config = 'bench/postmark.large.config'
 
     @benchmacro
     class tarx:
@@ -457,7 +464,7 @@ class benchmarks:
 
     @benchmacro
     class build_apache:
-        free_space = 512
+        free_space = 6 * 1024
         def run(self):
             tar_file = 'bench/httpd-2.0.63.tar.gz'
             path = os.path.join(self.mnt, 'httpd-2.0.63')
@@ -476,9 +483,9 @@ class benchmarks:
 
     @benchmacro
     class bonnie:
-        free_space = 2 * 1024
+        free_space = 6 * 1024
         def run(self):
-            cmd = ['bonnie++', '-d', self.mnt, '-r', '512']
+            cmd = ['bonnie++', '-d', self.mnt, '-r', '1024']
             devnull = open('/dev/null', 'rw')
             subprocess.check_call(self.cmd,
                                   stdout=devnull, stderr=devnull,
@@ -487,9 +494,9 @@ class benchmarks:
 
     @benchmacro
     class bonnie_sync:
-        free_space = 2 * 1024
+        free_space = 6 * 1024
         def run(self):
-            cmd = ['bonnie++', '-d', self.mnt, '-r', '512', '-b']
+            cmd = ['bonnie++', '-d', self.mnt, '-r', '1024', '-b']
             devnull = open('/dev/null', 'rw')
             subprocess.check_call(cmd,
                                   stdout=devnull, stderr=devnull,
