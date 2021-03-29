@@ -15,11 +15,17 @@
 #define MODE_BPFS 3
 
 #define COMMIT_MODE MODE_BPFS
+#define CONFIG_SIG_HANDLER
+int epoch_barrier;
+__asm__(".symver memcpy, memcpy@GLIBC_2.2.5");
+
 
 // Allow in-place append writes
-#define SCSP_OPT_APPEND (1 && COMMIT_MODE == MODE_SCSP)
+#define SCSP_OPT_APPEND_ALLOW 1
+#define SCSP_OPT_APPEND (SCSP_OPT_APPEND_ALLOW && COMMIT_MODE == MODE_SCSP)
 // Write [acm]time independently of the commit
-#define SCSP_OPT_TIME (1 && COMMIT_MODE == MODE_SCSP)
+#define SCSP_OPT_TIME_ALLOW 1
+#define SCSP_OPT_TIME (SCSP_OPT_TIME_ALLOW && COMMIT_MODE == MODE_SCSP)
 
 #define APPEASE_VALGRIND 0
 // Detect when an inode is used that should no longer be linked into any dir.

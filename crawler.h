@@ -11,7 +11,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-
+#define CONFIG_EPOCH
+void epoch(char *argv);
 void crawler_init(void);
 
 

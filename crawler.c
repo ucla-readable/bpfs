@@ -11,9 +11,27 @@
 #include <unistd.h>
 
 
+#define CRAWL_DEBUG 0
+#if CRAWL_DEBUG
+	#define Dprintf(x...) fprintf(stderr,x)
+#else
+	#define Dprintf(x...) do{}while(0)
+#endif
 //
 // Core crawler
 
+void epoch(char *argv)
+{
+	#ifdef CONFIG_EPOCH
+		//static uint64_t nepoch = 0;
+		//assert(argv != NULL);
+		//printf("#%lu %s : %s\n", nepoch++, __func__, argv);
+		//fflush(stdout);
+		__asm__ __volatile__ ("nop;");
+	#else
+		do{}while(0);
+	#endif
+}
 static char zero_block[BPFS_BLOCK_SIZE]
 	__attribute__((aligned(BPFS_BLOCK_SIZE)));
 
@@ -24,6 +42,8 @@ static int crawl_leaf(uint64_t prev_blockno, uint64_t blockoff,
 					  crawl_blockno_callback bcallback,
 					  uint64_t *new_blockno)
 {
+        Dprintf("%s()\n", __FUNCTION__);
+
 	uint64_t blockno = prev_blockno;
 	bool is_hole = blockno == BPFS_BLOCKNO_INVALID && commit == COMMIT_NONE;
 	uint64_t child_blockno;
@@ -80,6 +100,7 @@ static int crawl_hole(uint64_t blockoff,
 
 	assert(crawl_start / BPFS_BLOCK_SIZE <= blockoff);
 	assert(off + size <= valid);
+	assert(callback);
 
 	while (off < end)
 	{
@@ -108,15 +129,18 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
                        uint64_t crawl_start, enum commit commit,
                        unsigned height, uint64_t max_nblocks,
                        crawl_callback callback, void *user,
-                       crawl_blockno_callback bcallback,
+                  crawl_blockno_callback bcallback,
 					   uint64_t *new_blockno)
 {
+        Dprintf("%s(height=%u, ino=%lu)\n", __FUNCTION__, height, off/sizeof(struct bpfs_inode));
+
 	uint64_t blockno = prev_blockno;
 	struct bpfs_indir_block *indir;
 	uint64_t child_max_nblocks = max_nblocks / BPFS_BLOCKNOS_PER_INDIR;
 	uint64_t child_max_nbytes = child_max_nblocks * BPFS_BLOCK_SIZE;
 	uint64_t firstno = off / child_max_nbytes;
 	uint64_t lastno = (off + size - 1) / child_max_nbytes;
+        Dprintf("%s(firstno=%lu, lastno=%lu, child_max_nbytes=%lu)\n", __FUNCTION__, firstno, lastno, child_max_nbytes);
 	uint64_t validno = (valid + child_max_nbytes - 1) / child_max_nbytes;
 	uint64_t in_hole = false;
 	bool only_invalid = off >= valid;
@@ -140,6 +164,8 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 
 	if (blockno == BPFS_BLOCKNO_INVALID)
 	{
+		if (!callback)
+			return 0;
 		if (commit == COMMIT_NONE)
 			return crawl_hole(blockoff, off, size, valid, crawl_start,
 			                  callback, user);
@@ -238,6 +264,7 @@ static int crawl_indir(uint64_t prev_blockno, uint64_t blockoff,
 				// indirect_cow_block_required(blockno) not required
 				indir = (struct bpfs_indir_block*) get_block(blockno);
 			}
+			epoch("crawl_indir");
 			indir->addr[no] = child_new_blockno;
 #if INDIRECT_COW
 			// Neccessary for plugging a file hole.
@@ -327,7 +354,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
                           uint64_t *prev_blockno, bool blockno_refed)
 {
 	uint64_t new_blockno = *prev_blockno;
-	unsigned root_off = block_offset(root);
+	unsigned root_off = block_offset(root); // offset of the root within a block = root % BPFS_BLOCK_SIZE
 	uint64_t end;
 	uint64_t max_nblocks;
 	uint64_t child_new_blockno;
@@ -380,6 +407,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 				return r;
 			if (*prev_blockno != new_blockno)
 			{
+				// epoch()? -- no
 				root = (struct bpfs_tree_root*)
 				           (get_block(new_blockno) + root_off);
 				change_height_holes = true;
@@ -394,6 +422,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 				return r;
 			if (*prev_blockno != new_blockno)
 			{
+				// epoch() ? -- no
 				root = (struct bpfs_tree_root*)
 				           (get_block(new_blockno) + root_off);
 				change_height_holes = true;
@@ -402,7 +431,10 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 	}
 
 	child_new_blockno = tree_root_addr(root);
+	// the child block of the root
 	max_nblocks = tree_max_nblocks(root->ha.height);
+	// max_nblocks is the max number of leaf blocks
+	// a tree of height 'h' can have
 	if (commit != COMMIT_NONE)
 	{
 		child_size = size;
@@ -425,6 +457,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 		xcall(indirect_cow_parent_push(new_blockno));
 	if (!root->ha.height)
 	{
+// height of tree = 0;
 		if (child_size)
 			r = crawl_leaf(child_new_blockno, 0, off, child_size,
 			               child_valid, off,
@@ -435,6 +468,7 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 	}
 	else
 	{
+// height of tree != 0;
 		r = crawl_indir(child_new_blockno, off / BPFS_BLOCK_SIZE,
 		                off, child_size, child_valid,
                         off, child_commit, root->ha.height, max_nblocks,
@@ -490,12 +524,14 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 				if (change_size)
 					indirect_cow_block_required(new_blockno);
 				// else indirect_cow_block_required(new_blockno) not required
+				// epoch() ? -- no
 				root = (struct bpfs_tree_root*)
 				           (get_block(new_blockno) + root_off);
 			}
 
 			if (change_addr)
 			{
+				// epoch() -- ha_set_addr has an epoch
 				ha_set_addr(&root->ha, child_new_blockno);
 #if SCSP_OPT_APPEND
 				if (!root->nbytes)
@@ -504,8 +540,10 @@ static int crawl_tree_ref(struct bpfs_tree_root *root, uint64_t off,
 					                          sizeof(root->ha));
 #endif
 			}
-			if (change_size)
+			if (change_size) {
+				epoch("crawl_tree_ref");
 				root->nbytes = end;
+			}
 
 			*prev_blockno = new_blockno;
 		}
@@ -557,6 +595,7 @@ int crawl_inodes(uint64_t off, uint64_t size, enum commit commit,
 #if COMMIT_MODE == MODE_SCSP
 		assert(super_blockno != BPFS_BLOCKNO_SUPER);
 #endif
+		epoch("crawl_inodes");
 		super->inode_root_addr = child_blockno;
 	}
 
@@ -591,6 +630,7 @@ int crawl_inode(uint64_t ino, enum commit commit,
 	uint64_t ino_off;
 
 	xcall(get_inode_offset(ino, &ino_off));
+	// ino_off is the offset within the inode file
 
 	return crawl_inodes(ino_off, sizeof(struct bpfs_inode), commit,
 	                    callback_crawl_inode, &ccid);
@@ -674,6 +714,7 @@ static int callback_crawl_data_2_tree(uint64_t blockoff, char *block,
 			struct ccd2dd *d = &ccd2d->d[i >> 1];
 			bool new = *blockno != prev_blockno;
 			enum commit c = new ? COMMIT_FREE : COMMIT_COPY;
+			assert(d && d->callback);
 			block = get_block(*blockno);
 			int r = d->callback(blockoff, block, d->off % BPFS_BLOCK_SIZE,
 			                    d->size, valid, crawl_start, c,

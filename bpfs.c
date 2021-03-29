@@ -2,6 +2,9 @@
  * University of California. It is distributed under the terms of version 2
  * of the GNU GPL. See the file LICENSE for details. */
 
+__asm__(".symver memcpy, memcpy@GLIBC_2.2.5");
+#include "mtrace-magic.h"
+#include <sys/mman.h>
 #include "mkbpfs.h"
 #include "bpfs_structs.h"
 #include "dcache.h"
@@ -11,6 +14,7 @@
 #include "hash_map.h"
 
 #define FUSE_USE_VERSION FUSE_MAKE_VERSION(2, 8)
+//#include "/usr/local/include/fuse/fuse_lowlevel.h"
 #include <fuse/fuse_lowlevel.h>
 
 #include <assert.h>
@@ -51,7 +55,7 @@
 
 // STDTIMEOUT is not 0 because of a fuse kernel module bug.
 // Miklos's 2006/06/27 email, E1FvBX0-0006PB-00@dorka.pomaz.szeredi.hu, fixes.
-#define STDTIMEOUT 1.0
+#define STDTIMEOUT 0.000001
 
 // Maximum interval between two random fscks. Unit is microseconds.
 #define RFSCK_MAX_INTERVAL 100000
@@ -67,6 +71,7 @@
 #define epoch_barrier() __asm__ __volatile__("": : :"memory")
 
 #define DEBUG (0 && !defined(NDEBUG))
+//#define DEBUG (1)
 #if DEBUG
 # define Dprintf(x...) fprintf(stderr, x)
 #else
@@ -116,6 +121,121 @@ static size_t bpram_size;
 
 static struct bpfs_super *bpfs_super;
 
+int fuse_open_start;
+int fuse_read_start, fuse_read_stop;
+int fuse_write_start, fuse_write_stop;
+int memcpy_start, memcpy_stop;
+unsigned long long n_write = 0, n_read = 0, n_lookup = 0;
+unsigned long long n_write_sz = 0, n_read_sz = 0;
+bool fbnch_child = false;
+enum stats { READ, WRITE, LOOKUP, N_STATS };
+
+#define CHECK_POINT 	0
+#define FLUSH_KCACHE 	0
+#define KEEP_STATS 	1
+
+void __attribute__ ((noinline)) record_open_start()
+{
+        Dprintf("%s()\n", __func__);
+        fuse_open_start = 1;
+}
+
+void __attribute__ ((noinline)) record_read_start() 
+{ 
+	Dprintf("%s()\n", __func__);
+	fuse_read_start = 1; 
+}
+
+void __attribute__ ((noinline)) record_read_stop()  
+{ 
+	Dprintf("%s()\n", __func__);
+	fuse_read_stop = 1; 
+}
+
+void __attribute__ ((noinline)) record_write_start()
+{
+        Dprintf("%s()\n", __func__);
+        fuse_write_start = 1;
+}
+
+void __attribute__ ((noinline)) record_write_stop()
+{
+        Dprintf("%s()\n", __func__);
+        fuse_write_stop = 1;
+}
+
+void inc_stat(int stat)
+{
+	switch(stat)
+	{
+		case READ : ++n_read; break;
+		case WRITE : ++n_write; break;
+		case LOOKUP : ++n_lookup; break;
+		default :;
+	}
+}
+
+void __attribute__ ((noinline)) record_memcpy_start()
+{
+	Dprintf("%s()\n", __func__);
+	memcpy_start = 1;
+}
+
+void __attribute__ ((noinline)) record_memcpy_stop()
+{
+	Dprintf("%s()\n", __func__);
+	memcpy_stop = 1;
+}
+
+void print_stats()
+{
+	fprintf(stdout, "\n");
+	fprintf(stdout, "[BPFS] Current stats...\n");
+	fprintf(stdout, "[BPFS] n_write    : %llu\n", n_write);
+	fprintf(stdout, "[BPFS] n_read     : %llu\n", n_read);
+	fprintf(stdout, "[BPFS] n_lookup   : %llu\n", n_lookup);
+	fprintf(stdout, "[BPFS] n_write_sz : %llu bytes\n", n_write_sz);
+	fprintf(stdout, "[BPFS] n_read_sz  : %llu bytes\n", n_read_sz);
+}
+
+void reset_stats()
+{
+	fprintf(stdout, "[BPFS] Resetting stats...\n");
+	fprintf(stdout, "\n");
+	n_write = 0;
+	n_write_sz = 0;
+	n_read = 0;
+	n_read_sz = 0;
+	n_lookup = 0;
+}
+
+int cache;
+int open_kcache()
+{
+        cache = open("/proc/sys/vm/drop_caches", O_RDWR);
+        if (cache == -1){
+                printf("Failed to open caches\n");
+                return -1;
+        }
+        return 0;
+}
+
+int flush_kcache()
+{
+	if (!fbnch_child)
+		return 0;
+
+        usleep(100);
+        sync();
+        if (write(cache, "3\n",2) == 2)
+                return 0;
+        else
+        {
+                printf("Failed to write to caches\n");
+                return -1;
+        }
+}
+
 void set_super(struct bpfs_super *super)
 {
 	assert(super->magic == BPFS_FS_MAGIC);
@@ -124,7 +244,7 @@ void set_super(struct bpfs_super *super)
 
 struct bpfs_super* get_bpram_super(void)
 {
-	static_assert(BPFS_BLOCKNO_INVALID == 0 && BPFS_BLOCKNO_SUPER == 1);
+	static_assert(BPFS_BLOCKNO_INVALID == 0 && BPFS_BLOCKNO_SUPER == 1, "HOLA");
 	return (struct bpfs_super*) bpram;
 }
 
@@ -573,7 +693,7 @@ static uint64_t alloc_block(void)
 	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, no + 1);
 	if (no == block_alloc.bitmap.ntotal)
 		return BPFS_BLOCKNO_INVALID;
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	assert(no + 1 >= BPFS_BLOCKNO_FIRST_ALLOC);
 #if (DETECT_STRAY_ACCESSES || DETECT_NONCOW_WRITES_SP || DETECT_NONCOW_WRITES_SCSP)
 	xsyscall(mprotect(get_block(no + 1), BPFS_BLOCK_SIZE, PROT_READ | PROT_WRITE));
@@ -588,7 +708,7 @@ void unfree_block(uint64_t blockno)
 {
 	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, blockno);
 	assert(blockno != BPFS_BLOCKNO_INVALID);
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	bitmap_unfree(&block_alloc.bitmap, blockno - 1);
 #if (DETECT_STRAY_ACCESSES || DETECT_NONCOW_WRITES_SP)
 	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_READ | PROT_WRITE));
@@ -601,7 +721,7 @@ void unfree_block(uint64_t blockno)
 #if COMMIT_MODE != MODE_BPFS
 bool block_freshly_alloced(uint64_t blockno)
 {
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	return staged_list_freshly_alloced(block_alloc.bitmap.allocs, blockno - 1);
 }
 #endif
@@ -610,7 +730,7 @@ static void set_block(uint64_t blockno)
 {
 	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, blockno);
 	assert(blockno != BPFS_BLOCKNO_INVALID);
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	bitmap_set(&block_alloc.bitmap, blockno - 1);
 }
 
@@ -625,7 +745,7 @@ static void free_block(uint64_t blockno)
 #else
 	assert(blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
 #endif
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	bitmap_free(&block_alloc.bitmap, blockno - 1);
 #if DETECT_STRAY_ACCESSES
 	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_NONE));
@@ -644,7 +764,7 @@ void unalloc_block(uint64_t blockno)
 	DBprintf("%s() = %" PRIu64 "\n", __FUNCTION__, blockno);
 	assert(blockno != BPFS_BLOCKNO_INVALID);
 	assert(blockno >= BPFS_BLOCKNO_FIRST_ALLOC);
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	bitmap_unalloc(&block_alloc.bitmap, blockno - 1);
 #if DETECT_STRAY_ACCESSES
 	xsyscall(mprotect(get_block(blockno), BPFS_BLOCK_SIZE, PROT_NONE));
@@ -710,7 +830,7 @@ char* get_block(uint64_t blockno)
 		assert(0);
 		return NULL;
 	}
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	if (blockno > bpfs_super->nblocks)
 	{
 		assert(0);
@@ -732,7 +852,7 @@ char* get_block(uint64_t blockno)
 static bool block_is_alloced(uint64_t blockno)
 {
 	xassert(blockno != BPFS_BLOCKNO_INVALID);
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	return bitmap_is_alloced(&block_alloc.bitmap, blockno - 1);
 }
 #endif
@@ -777,10 +897,12 @@ uint64_t cow_block(uint64_t old_blockno,
 
 	old_block = get_block(old_blockno);
 	new_block = get_block(new_blockno);
+	//epoch("cow_block 01");
 	memcpy(new_block, old_block, off);
 	cow_nbytes += off;
 	if (end < valid)
 	{
+		//epoch("cow_block 02");
 		memcpy(new_block + end, old_block + end, valid - end);
 		cow_nbytes += valid - end;
 	}
@@ -805,9 +927,12 @@ uint64_t cow_block_hole(unsigned off, unsigned size, unsigned valid)
 	// DETECT_NONCOW_WRITES_SCSP: do not mark read-only; no dram copy
 
 	block = get_block(blockno);
+	//epoch("cow_block_hole 01");
 	memset(block, 0, off);
-	if (end < valid)
+	if (end < valid){
+		//epoch("cow_block_hole 02");
 		memset(block + end, 0, valid - end);
+	}
 	return blockno;
 }
 
@@ -839,6 +964,7 @@ uint64_t cow_block_entire(uint64_t old_blockno)
 
 	old_block = get_block(old_blockno);
 	new_block = get_block(new_blockno);
+	//epoch("cow_block_entire");
 	memcpy(new_block, old_block, BPFS_BLOCK_SIZE);
 	cow_nbytes += BPFS_BLOCK_SIZE;
 	cow_nblocks++;
@@ -878,7 +1004,7 @@ static int init_inode_allocations(void)
 	struct bpfs_tree_root *inode_root = get_inode_root();
 
 	// This code assumes that inodes are contiguous in the inode tree
-	static_assert(!(BPFS_BLOCK_SIZE % sizeof(struct bpfs_inode)));
+	static_assert(!(BPFS_BLOCK_SIZE % sizeof(struct bpfs_inode)),"HOLA");
 
 	return bitmap_init(&inode_alloc.bitmap,
 	                   NBLOCKS_FOR_NBYTES(inode_root->nbytes)
@@ -902,6 +1028,7 @@ static int callback_init_inodes(uint64_t blockoff, char *block,
 {
 #if APPEASE_VALGRIND || DETECT_ZEROLINKS_WITH_LINKS
 	assert(!(off % sizeof(struct bpfs_inode)));
+	epoch("callback_init_inodes");
 	for (; off + sizeof(struct bpfs_inode) <= size; off += sizeof(struct bpfs_inode))
 	{
 		struct bpfs_inode *inode = (struct bpfs_inode*) (block + off);
@@ -934,7 +1061,7 @@ static uint64_t alloc_inode(void)
 		no = bitmap_alloc(&inode_alloc.bitmap);
 		assert(no != inode_alloc.bitmap.ntotal);
 	}
-	static_assert(BPFS_INO_INVALID == 0);
+	static_assert(BPFS_INO_INVALID == 0,"HOLA");
 #if DETECT_ZEROLINKS_WITH_LINKS
 	assert(!get_inode(no + 1)->nlinks);
 #endif
@@ -945,7 +1072,7 @@ static uint64_t alloc_inode(void)
 static bool set_inode(uint64_t ino)
 {
 	assert(ino != BPFS_INO_INVALID);
-	static_assert(BPFS_INO_INVALID == 0);
+	static_assert(BPFS_INO_INVALID == 0,"HOLA");
 	return bitmap_ensure_set(&inode_alloc.bitmap, ino - 1);
 }
 
@@ -953,7 +1080,7 @@ static void free_inode(uint64_t ino)
 {
 	assert(ino != BPFS_INO_INVALID);
 	DIprintf("%s(ino = %" PRIu64 ")\n", __FUNCTION__, ino);
-	static_assert(BPFS_INO_INVALID == 0);
+	static_assert(BPFS_INO_INVALID == 0,"HOLA");
 	bitmap_free(&inode_alloc.bitmap, ino - 1);
 }
 
@@ -978,7 +1105,7 @@ int get_inode_offset(uint64_t ino, uint64_t *poffset)
 		return -EINVAL;
 	}
 
-	static_assert(BPFS_INO_INVALID == 0);
+	static_assert(BPFS_INO_INVALID == 0,"HOLA");
 	no = ino - 1;
 
 	if (no >= inode_alloc.bitmap.ntotal)
@@ -988,6 +1115,7 @@ int get_inode_offset(uint64_t ino, uint64_t *poffset)
 	}
 
 	offset = no * sizeof(struct bpfs_inode);
+	// offset = (ino - 1) * 128B;
 	if (offset + sizeof(struct bpfs_inode) > get_inode_root()->nbytes)
 	{
 		assert(0);
@@ -1026,6 +1154,8 @@ static bool can_atomic_write(unsigned offset, unsigned size)
 	unsigned last = offset + size - 1;
 	return last - offset < ATOMIC_SIZE
 	       && (offset % ATOMIC_SIZE) <= (last % ATOMIC_SIZE);
+	// the second condition is to ensure that the update is
+	// 64-bit word aligned
 }
 
 static uint64_t tree_nblocks_nblocks;
@@ -1058,7 +1188,7 @@ static uint64_t bpram_blockno(const void *x)
 	assert(bpram <= c && c < bpram + bpram_size);
 	if (c < bpram || bpram + bpram_size <= c)
 		return BPFS_BLOCKNO_INVALID;
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	return (((uintptr_t) (c - bpram)) / BPFS_BLOCK_SIZE) + 1;
 }
 #endif
@@ -1104,6 +1234,7 @@ void ha_set_addr(struct height_addr *pha, uint64_t addr)
 {
 	struct height_addr ha = { .height = pha->height, .addr = addr };
 	assert(addr <= BPFS_TREE_ROOT_MAX_ADDR);
+	epoch("ha_set_addr");
 	*pha = ha;
 }
 
@@ -1112,6 +1243,7 @@ void ha_set(struct height_addr *pha, uint64_t height, uint64_t addr)
 	struct height_addr ha = { .height = height, .addr = addr };
 	assert(height <= BPFS_TREE_MAX_HEIGHT);
 	assert(addr <= BPFS_TREE_ROOT_MAX_ADDR);
+	epoch("ha_set");
 	*pha = ha;
 }
 
@@ -1121,6 +1253,8 @@ void ha_set(struct height_addr *pha, uint64_t height, uint64_t addr)
 
 uint64_t tree_max_nblocks(uint64_t height)
 {
+	// returns the number of leaf blocks
+	// a tree of height 'h' can have
 	uint64_t max_nblocks = 1;
 	while (height--)
 		max_nblocks *= BPFS_BLOCKNOS_PER_INDIR;
@@ -1143,6 +1277,7 @@ int tree_change_height(struct bpfs_tree_root *root,
                        unsigned new_height,
                        enum commit commit, uint64_t *blockno)
 {
+	epoch("tree_change_height 01");
 	uint64_t height = tree_root_height(root);
 	uint64_t new_root_addr;
 
@@ -1168,7 +1303,6 @@ int tree_change_height(struct bpfs_tree_root *root,
 				if ((new_blockno = alloc_block()) == BPFS_BLOCKNO_INVALID)
 					return -ENOSPC;
 				new_indir = (struct bpfs_indir_block*) get_block(new_blockno);
-
 				new_indir->addr[0] = new_root_addr;
 
 				// If the file was larger than the tree we need to mark the
@@ -1202,6 +1336,7 @@ int tree_change_height(struct bpfs_tree_root *root,
 		}
 	}
 
+	epoch("tree_change_height 02");
 	if (commit == COMMIT_COPY)
 	{
 		unsigned root_off = block_offset(root);
@@ -1213,6 +1348,7 @@ int tree_change_height(struct bpfs_tree_root *root,
 		*blockno = new_blockno;
 	}
 
+	// ha_set has epoch
 	ha_set(&root->ha, new_height, new_root_addr);
 	return 0;
 }
@@ -1229,6 +1365,58 @@ uint64_t tree_root_addr(const struct bpfs_tree_root *root)
 	if (!root->nbytes)
 		return BPFS_BLOCKNO_INVALID;
 	return root->ha.addr;
+}
+
+
+//
+// directory read
+
+struct read_dir_data {
+	int (*callback)(uint64_t blockoff, unsigned off,
+                    const struct bpfs_dirent *dirent, void *user);
+	void *user;
+};
+
+static int callback_read_dir(uint64_t blockoff, char *block,
+                             unsigned off, unsigned size,
+                             unsigned valid, uint64_t crawl_start,
+                             enum commit commit, void *rdd_void,
+                             uint64_t *blockno)
+{
+	const struct read_dir_data *rdd = (const struct read_dir_data*) rdd_void;
+	unsigned end = off + size;
+
+	while (off + BPFS_DIRENT_MIN_LEN <= end)
+	{
+		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
+
+		assert(!(off % BPFS_DIRENT_ALIGN));
+
+		if (!dirent->rec_len)
+		{
+			// end of directory entries in this block
+			break;
+		}
+		off += dirent->rec_len;
+		xassert(off <= BPFS_BLOCK_SIZE); // x in assert for discover_inodes
+
+		if (dirent->ino != BPFS_INO_INVALID)
+		{
+			int r;
+
+			assert(dirent->rec_len >= BPFS_DIRENT_LEN(dirent->name_len));
+
+			r = rdd->callback(blockoff, off, dirent, rdd->user);
+			if (r)
+				return r;
+		}
+	}
+	return 0;
+}
+
+static int read_dir(uint64_t ino, uint64_t off, struct read_dir_data *rdd)
+{
+	return crawl_data(ino, off, BPFS_EOF, COMMIT_NONE, callback_read_dir, rdd);
 }
 
 
@@ -1281,6 +1469,15 @@ static void discover_tree_allocations(struct bpfs_tree_root *root)
 	}
 }
 
+static void tree_complete_shrink(struct bpfs_tree_root *root)
+{
+	if (tree_height(NBLOCKS_FOR_NBYTES(root->nbytes)) < tree_root_height(root))
+	{
+		// TODO: implement
+		// fprintf(stderr, "TODO: need to complete a tree shink\n");
+	}
+}
+
 static void discover_inode_allocations(uint64_t ino, bool mounting);
 
 struct mount_ino {
@@ -1288,39 +1485,22 @@ struct mount_ino {
 	uint64_t ino;
 };
 
-static int callback_discover_inodes(uint64_t blockoff, char *block,
-                                    unsigned off, unsigned size,
-                                    unsigned valid, uint64_t crawl_start,
-                                    enum commit commit, void *mi_void,
-                                    uint64_t *blockno)
+static int read_dir_callback_discover_inodes(uint64_t blockoff, unsigned off,
+                                             const struct bpfs_dirent *dirent,
+                                             void *mi_void)
 {
 	const struct mount_ino *mi = (const struct mount_ino*) mi_void;
-	unsigned end = off + size;
 
-	while (off + BPFS_DIRENT_MIN_LEN <= end)
+	discover_inode_allocations(dirent->ino, mi->mounting);
+
+	// Account for child's ".." dirent (not stored on disk):
+	if (mi->mounting && !bpfs_super->ephemeral_valid
+		&& dirent->file_type == BPFS_TYPE_DIR)
 	{
-		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
-		if (!dirent->rec_len)
-		{
-			// end of directory entries in this block
-			break;
-		}
-		off += dirent->rec_len;
-		xassert(off <= BPFS_BLOCK_SIZE);
-
-		if (dirent->ino != BPFS_INO_INVALID)
-		{
-			discover_inode_allocations(dirent->ino, mi->mounting);
-
-			// Account for child's ".." dirent (not stored on disk):
-			if (mi->mounting && !bpfs_super->ephemeral_valid
-			    && dirent->file_type == BPFS_TYPE_DIR)
-			{
-				get_inode(mi->ino)->nlinks++;
-				xassert(get_inode(mi->ino)->nlinks);
-			}
-		}
+		get_inode(mi->ino)->nlinks++;
+		xassert(get_inode(mi->ino)->nlinks);
 	}
+
 	return 0;
 }
 
@@ -1328,6 +1508,7 @@ static void discover_inode_allocations(uint64_t ino, bool mounting)
 {
 	struct bpfs_inode *inode = get_inode(ino);
 	struct mount_ino mi = {.mounting = mounting, .ino = ino};
+	struct read_dir_data rdd = {read_dir_callback_discover_inodes, &mi};
 	bool is_dir = BPFS_S_ISDIR(inode->mode);
 	bool was_set;
 
@@ -1356,10 +1537,10 @@ static void discover_inode_allocations(uint64_t ino, bool mounting)
 	if (!was_set)
 	{
 		// TODO: combine the inode and block discovery loops?
+		tree_complete_shrink(&inode->root);
 		discover_tree_allocations(&inode->root);
 		if (is_dir)
-			xcall(crawl_data(ino, 0, BPFS_EOF, COMMIT_NONE,
-			                 callback_discover_inodes, &mi));
+			xcall(read_dir(ino, 0, &rdd));
 	}
 }
 
@@ -1372,6 +1553,7 @@ static int callback_reset_inodes_nlinks(uint64_t blockoff, char *block,
 	assert(!(off % sizeof(struct bpfs_inode)));
 	assert(commit == COMMIT_FREE || commit == COMMIT_ATOMIC);
 
+	epoch("callback_reset_inodes_nlinks");
 	for (; off + sizeof(struct bpfs_inode) <= size; off += sizeof(struct bpfs_inode))
 	{
 		struct bpfs_inode *inode = (struct bpfs_inode*) (block + off);
@@ -1392,8 +1574,7 @@ static int init_allocations(bool mounting)
 
 	xcall(init_block_allocations());
 	xcall(init_inode_allocations());
-
-	static_assert(BPFS_BLOCKNO_INVALID == 0);
+	static_assert(BPFS_BLOCKNO_INVALID == 0,"HOLA");
 	for (i = 1; i < BPFS_BLOCKNO_FIRST_ALLOC; i++)
 		set_block(i);
 	set_block(bpfs_super->inode_root_addr);
@@ -1498,7 +1679,7 @@ static void persist_superblock(void)
 	{
 		size_t len = BPFS_BLOCK_SIZE * 2; /* two super blocks */
 		static_assert(BPFS_BLOCKNO_INVALID == 0
-		              && BPFS_BLOCKNO_SUPER == 1 && BPFS_BLOCKNO_SUPER_2 == 2);
+		              && BPFS_BLOCKNO_SUPER == 1 && BPFS_BLOCKNO_SUPER_2 == 2,"HOLA");
 		xsyscall(mprotect(bpram, len, PROT_READ | PROT_WRITE));
 	}
 # endif
@@ -1524,7 +1705,7 @@ static void persist_superblock(void)
 	{
 		size_t len = BPFS_BLOCK_SIZE * 2; /* two super blocks */
 		static_assert(BPFS_BLOCKNO_INVALID == 0
-		              && BPFS_BLOCKNO_SUPER == 1 && BPFS_BLOCKNO_SUPER_2 == 2);
+		              && BPFS_BLOCKNO_SUPER == 1 && BPFS_BLOCKNO_SUPER_2 == 2,"HOLA");
 		xsyscall(mprotect(bpram, len, PROT_READ));
 	}
 # endif
@@ -1716,27 +1897,36 @@ static int find_dirent(uint64_t parent_ino, const char *name,
                        const struct mdirent **pmd)
 {
 	const struct mdirent *md;
-
+// search the cache
 	if (!dcache_has_dir(parent_ino))
 	{
+	        Dprintf("%s() dcache_has_dir(%llu) miss \n", __FUNCTION__, parent_ino);
+// cache miss
 		int r;
+// reserve a cache entry
 		r = dcache_add_dir(parent_ino);
+
 		if (r < 0)
 			return r;
+// crawl the orig data struct
 		r = crawl_data(parent_ino, 0, BPFS_EOF, COMMIT_NONE,
 		               callback_load_directory, &parent_ino);
+// the call back loads the cache
+// at the reserved entry
 		if (r < 0)
 		{
 			dcache_rem_dir(parent_ino);
 			return r;
 		}
 	}
-
+// search the cache again
 	md = dcache_get_dirent(parent_ino, name);
 	if (!md)
 		return -ENOENT;
 	if (pmd)
 		*pmd = md;
+	
+	Dprintf("%s() dcache_get_dirent(%llu, %s) hit \n", __FUNCTION__, parent_ino, name);
 	return 0;
 }
 
@@ -1778,6 +1968,7 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
                                 uint64_t crawl_start, enum commit commit,
                                 void *si_void, uint64_t *blockno)
 {
+	epoch("callback_dirent_plug 01");
 	struct sd_ino *si = (struct sd_ino*) si_void;
 	struct str_dirent *sd = si->sd;
 	struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
@@ -1822,9 +2013,11 @@ static int callback_dirent_plug(uint64_t blockoff, char *block,
 			                    BPFS_BLOCK_SIZE - next_off);
 			xassert(!r); // FIXME: recover from OOM
 		}
+		dirent->ino = BPFS_INO_INVALID; // rec_len was guarding this field
 		dirent->rec_len = min_hole_size;
 	}
 	dirent->name_len = sd->str.len;
+	epoch("callback_dirent_plug 02");
 	memcpy(dirent->name, sd->str.str, sd->str.len);
 	sd->dirent_off = blockoff * BPFS_BLOCK_SIZE + off;
 	sd->dirent = dirent;
@@ -1836,6 +2029,7 @@ static int callback_dirent_append(uint64_t blockoff, char *block,
                                   uint64_t crawl_start, enum commit commit,
                                   void *si_void, uint64_t *blockno)
 {
+	epoch("callback_dirent_append");
 	struct sd_ino *si = (struct sd_ino*) si_void;
 	struct str_dirent *sd = si->sd;
 	uint64_t hole_size = BPFS_DIRENT_LEN(sd->str.len);
@@ -1924,6 +2118,7 @@ static int callback_set_dirent_ino(uint64_t blockoff, char *block,
 	}
 	dirent = (struct bpfs_dirent*) (block + off);
 
+	epoch("callback_set_dirent_ino");
 	dirent->ino = ino;
 
 	return 0;
@@ -1952,6 +2147,7 @@ static int callback_clear_dirent_ino(uint64_t blockoff, char *block,
 	dirent = (struct bpfs_dirent*) (block + off);
 
 	*ino = dirent->ino;
+	epoch("callback_clear_dirent_ino");
 	dirent->ino = BPFS_INO_INVALID;
 
 	return 0;
@@ -1992,10 +2188,13 @@ static int callback_addrem_dirent(char *block, unsigned off,
 		}
 		inode = (struct bpfs_inode*) (block + off);
 
-		if (cadd->add)
+		epoch("callback_addrem_dirent");
+		if (cadd->add){
 			inode->nlinks++;
-		else
+		}
+		else {
 			inode->nlinks--;
+		}
 		assert(inode->nlinks >= 2);
 	}
 
@@ -2079,6 +2278,7 @@ static int callback_set_cmtime(char *block, unsigned off,
 #endif
 	inode = (struct bpfs_inode*) (block + off);
 
+	epoch("callback_set_cmtime");
 	inode->ctime = inode->mtime = *new_time;
 #if SCSP_OPT_TIME
 	indirect_cow_block_direct(new_blockno, block_offset(&inode->mtime),
@@ -2144,10 +2344,10 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 		if (inode->root.ha.addr == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
 
+		epoch("create_file");
 		if (S_ISDIR(mode))
 		{
 			struct bpfs_dirent *ndirent;
-
 			inode->nlinks = 2; // for the ".." dirent
 
 			inode->root.nbytes = BPFS_BLOCK_SIZE;
@@ -2203,7 +2403,7 @@ static int create_file(fuse_req_t req, fuse_ino_t parent_ino,
 static void fuse_init(void *userdata, struct fuse_conn_info *conn)
 {
 	const char *mode;
-	static_assert(FUSE_ROOT_ID == BPFS_INO_ROOT);
+	static_assert(FUSE_ROOT_ID == BPFS_INO_ROOT,"HOLA");
 	Dprintf("%s()\n", __FUNCTION__);
 	switch (COMMIT_MODE)
 	{
@@ -2228,8 +2428,10 @@ static void fuse_destroy(void *userdata)
 {
 	Dprintf("%s()\n", __FUNCTION__);
 
-	if (!bpfs_super->ephemeral_valid)
+	if (!bpfs_super->ephemeral_valid){
+		epoch("fuse_destroy");
 		bpfs_super->ephemeral_valid = 1;
+	}
 
 	bpfs_commit();
 }
@@ -2252,7 +2454,7 @@ static void fuse_statfs(fuse_req_t req, fuse_ino_t ino)
 	memset(&stv, 0, sizeof(stv));
 	stv.f_bsize = BPFS_BLOCK_SIZE;
 	stv.f_frsize = BPFS_BLOCK_SIZE;
-	static_assert(sizeof(stv.f_blocks) >= sizeof(bpfs_super->nblocks));
+	static_assert(sizeof(stv.f_blocks) >= sizeof(bpfs_super->nblocks),"HOLA");
 	stv.f_blocks = bpfs_super->nblocks;
 	stv.f_bfree = block_alloc.bitmap.nfree;
 	stv.f_bavail = stv.f_bfree; // NOTE: no space reserved for root
@@ -2295,8 +2497,12 @@ static void fuse_lookup(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 	struct fuse_entry_param e;
 	int r;
 
-	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
+	Dprintf("%s(parent_ino = %lu,name = '%s')\n", \
 	        __FUNCTION__, parent_ino, name);
+
+	#if KEEP_STATS
+		inc_stat(LOOKUP);
+	#endif
 
 	r = find_dirent(parent_ino, name, &mdirent);
 	if (r < 0)
@@ -2311,15 +2517,13 @@ static void fuse_lookup(fuse_req_t req, fuse_ino_t parent_ino, const char *name)
 	xcall(fuse_reply_entry(req, &e));
 }
 
-#if 0
 static void fuse_forget(fuse_req_t req, fuse_ino_t ino, unsigned long nlookup)
 {
-	Dprintf("%s(ino = %lu, nlookup = %lu)\n", __FUNCTION__, ino, nlookup);
+	//Dprintf("%s(ino = %lu, nlookup = %lu)\n", __FUNCTION__, ino, nlookup);
 
 	bpfs_commit();
 	fuse_reply_none(req);
 }
-#endif
 
 // Not implemented: bpfs_access() (use default_permissions instead)
 
@@ -2355,6 +2559,7 @@ static int truncate_block_zero_leaf(uint64_t prev_blockno, uint64_t begin,
 #endif
 	block = get_block(blockno);
 
+	//epoch("truncate_block_zero_leaf");
 	memset(block + begin, 0, end - begin);
 
 	*new_blockno = blockno;
@@ -2393,18 +2598,23 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 	}
 #endif
 
+	epoch("truncate_block_zero_indir 01");
 	for (no = beginno + 1; no < endno; no++)
 	{
 #if APPEASE_VALGRIND
 		indir->addr[no] = BPFS_BLOCKNO_INVALID;
 #else
-		if (indir->addr[no] != BPFS_BLOCKNO_INVALID)
+		if (indir->addr[no] != BPFS_BLOCKNO_INVALID){
 			indir->addr[no] = BPFS_BLOCKNO_INVALID;
+		}
 #endif
 	}
 
-	if (begin_aligned)
+	epoch("truncate_block_zero_indir 02");
+
+	if (begin_aligned){
 		indir->addr[beginno] = BPFS_BLOCKNO_INVALID;
+	}
 	else if (indir->addr[beginno] != BPFS_BLOCKNO_INVALID)
 	{
 		uint64_t child_begin = begin - beginno * child_max_nbytes;
@@ -2436,10 +2646,12 @@ static int truncate_block_zero_indir(uint64_t prev_blockno, uint64_t begin,
 		if (r < 0)
 			return r;
 
-		if (indir->addr[beginno] != child_blockno)
+		if (indir->addr[beginno] != child_blockno){
 			indir->addr[beginno] = child_blockno;
+		}
 	}
 
+	epoch("truncate_block_zero_indir 03");
 	*new_blockno = blockno;
 	return 0;
 }
@@ -2517,6 +2729,34 @@ static unsigned count_bits(unsigned x)
 	return n;
 }
 
+#define ATOMIC_MEMCPY_X(__XB, __Xb, __dst, __src, __n) \
+	do { \
+		typedef uint##__Xb##_t am_type_t; \
+		am_type_t *dst_x = (am_type_t*) ROUNDDOWN64(__dst, __XB); \
+		am_type_t x = *dst_x; \
+		char *x_target = ((char*) &x) + (((size_t) __dst) - ((size_t) dst_x)); \
+		memcpy(x_target, __src, __n); \
+		*dst_x = x; \
+	} while (0)
+
+// memcpy is not guaranteed to, and I've seen it not, write with a single
+// instruction for sizes <= ATOMIC_SIZE.
+static void atomic_memcpy(void *dst, const void *src, size_t n)
+{
+	static_assert(ATOMIC_SIZE == 8,"HOLA");
+	assert(can_atomic_write(block_offset(dst), n));
+
+	// Specialize for each size to reduce byte count overhead
+	if (n == 1)
+		ATOMIC_MEMCPY_X(1, 8, dst, src, n);
+	else if (n == 2)
+		ATOMIC_MEMCPY_X(2, 16, dst, src, n);
+	else if (n <= 4)
+		ATOMIC_MEMCPY_X(4, 32, dst, src, n);
+	else if (n <= 8)
+		ATOMIC_MEMCPY_X(8, 64, dst, src, n);
+}
+
 struct callback_setattr_data {
 	struct stat *attr;
 	int to_set;
@@ -2562,12 +2802,13 @@ static int callback_setattr(char *block, unsigned off,
 	{
 		struct bpfs_inode stage = {.uid = attr->st_uid, .gid = attr->st_gid};
 
-		static_assert(!(offsetof(struct bpfs_inode, uid) % 8));
+		static_assert(!(offsetof(struct bpfs_inode, uid) % 8),"HOLA");
 		static_assert(offsetof(struct bpfs_inode, uid) + sizeof(inode->uid)
-		              == offsetof(struct bpfs_inode, gid));
-		static_assert(sizeof(inode->uid) + sizeof(inode->gid) == 8);
+		              == offsetof(struct bpfs_inode, gid),"HOLA");
+		static_assert(sizeof(inode->uid) + sizeof(inode->gid) == 8,"HOLA");
 
-		memcpy(&inode->uid, &stage.uid, sizeof(inode->uid)+sizeof(inode->gid));
+		atomic_memcpy(&inode->uid, &stage.uid,
+		              sizeof(inode->uid) + sizeof(inode->gid));
 	}
 	else if (to_set & FUSE_SET_ATTR_UID)
 		inode->uid = attr->st_uid;
@@ -2907,6 +3148,10 @@ static void fuse_unlink(fuse_req_t req, fuse_ino_t parent_ino,
 
 	Dprintf("%s(parent_ino = %lu, name = '%s')\n",
 	        __FUNCTION__, parent_ino, name);
+
+	#if FLUSH_KCACHE
+		flush_kcache();
+	#endif
 
 	r = find_dirent(parent_ino, name, &mdirent);
 	if (r < 0)
@@ -3269,51 +3514,32 @@ struct readdir_params
 	char *buf;
 };
 
-static int callback_readdir(uint64_t blockoff, char *block,
-                            unsigned off, unsigned size, unsigned valid,
-                            uint64_t crawl_start, enum commit commit,
-                            void *p_void, uint64_t *blockno)
+static int read_dir_readdir(uint64_t blockoff, unsigned off,
+                            const struct bpfs_dirent *dirent, void *p_void)
 {
 	struct readdir_params *params = (struct readdir_params*) p_void;
-	const unsigned end = off + size;
-	while (off + BPFS_DIRENT_MIN_LEN <= end)
-	{
-		struct bpfs_dirent *dirent = (struct bpfs_dirent*) (block + off);
-		off_t oldsize = params->total_size;
-		struct stat stbuf;
-		size_t fuse_dirent_size;
+	off_t oldsize = params->total_size;
+	struct stat stbuf;
+	size_t fuse_dirent_size;
 
-		assert(!(off % BPFS_DIRENT_ALIGN));
+	memset(&stbuf, 0, sizeof(stbuf));
+	stbuf.st_ino = dirent->ino;
+	stbuf.st_mode = b2f_filetype(dirent->file_type);
 
-		if (!dirent->rec_len)
-		{
-			// end of directory entries in this block
-			break;
-		}
-		off += dirent->rec_len;
-		assert(off <= BPFS_BLOCK_SIZE);
-		if (dirent->ino == BPFS_INO_INVALID)
-			continue;
-		assert(dirent->rec_len >= BPFS_DIRENT_LEN(dirent->name_len));
+	fuse_dirent_size = fuse_add_direntry(params->req, NULL, 0,
+	                                     dirent->name, NULL, 0);
+	if (params->total_size + fuse_dirent_size > params->max_size)
+		return 1;
+	params->total_size += fuse_dirent_size;
+	params->buf = (char*) realloc(params->buf, params->total_size);
+	if (!params->buf)
+		return -ENOMEM; // PERHAPS: retry with a smaller max_size?
 
-		memset(&stbuf, 0, sizeof(stbuf));
-		stbuf.st_ino = dirent->ino;
-		stbuf.st_mode = b2f_filetype(dirent->file_type);
+	fuse_add_direntry(params->req, params->buf + oldsize,
+	                  params->total_size - oldsize, dirent->name, &stbuf,
+	                  DIRENT_FIRST_PERSISTENT_OFFSET
+	                  + blockoff * BPFS_BLOCK_SIZE + off);
 
-		fuse_dirent_size = fuse_add_direntry(params->req, NULL, 0,
-		                                     dirent->name, NULL, 0);
-		if (params->total_size + fuse_dirent_size > params->max_size)
-			return 1;
-		params->total_size += fuse_dirent_size;
-		params->buf = (char*) realloc(params->buf, params->total_size);
-		if (!params->buf)
-			return -ENOMEM; // PERHAPS: retry with a smaller max_size?
-
-		fuse_add_direntry(params->req, params->buf + oldsize,
-		                  params->total_size - oldsize, dirent->name, &stbuf,
-		                  DIRENT_FIRST_PERSISTENT_OFFSET
-		                  + blockoff * BPFS_BLOCK_SIZE + off);
-	}
 	return 0;
 }
 
@@ -3338,6 +3564,7 @@ static int callback_set_atime(char *block, unsigned off,
 #endif
 	inode = (struct bpfs_inode*) (block + off);
 
+	epoch("callback_set_atime");
 	inode->atime = *new_time;
 #if SCSP_OPT_TIME
 	indirect_cow_block_direct(new_blockno, block_offset(&inode->atime),
@@ -3356,6 +3583,7 @@ static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
 	struct bpfs_inode *inode = get_inode(ino);
 	struct readdir_params params = {req, max_size, 0, NULL};
 	struct bpfs_time time_now = BPFS_TIME_NOW();
+	struct read_dir_data rdd = {read_dir_readdir, &params};
 	int r;
 	UNUSED(fi);
 
@@ -3406,8 +3634,7 @@ static void fuse_readdir(fuse_req_t req, fuse_ino_t ino, size_t max_size,
 	}
 	assert(off >= DIRENT_FIRST_PERSISTENT_OFFSET);
 
-	r = crawl_data(ino, off - DIRENT_FIRST_PERSISTENT_OFFSET, BPFS_EOF,
-	               COMMIT_NONE, callback_readdir, &params);
+	r = read_dir(ino, off - DIRENT_FIRST_PERSISTENT_OFFSET, &rdd);
 	if (r < 0)
 		goto abort;
 
@@ -3494,9 +3721,13 @@ static void fuse_create(fuse_req_t req, fuse_ino_t parent_ino,
 static void fuse_open(fuse_req_t req, fuse_ino_t ino,
                       struct fuse_file_info *fi)
 {
+	
 	struct bpfs_inode *inode;
 
 	Dprintf("%s(ino = %lu)\n", __FUNCTION__, ino);
+	#if CHECK_POINT
+		record_open_start();
+	#endif
 
 	inode = get_inode(ino);
 	if (!inode)
@@ -3529,6 +3760,22 @@ static int callback_read(uint64_t blockoff, char *block,
 	iov += blockoff - crawl_start / BPFS_BLOCK_SIZE;
 	iov->iov_base = block + off;
 	iov->iov_len = size;
+        Dprintf("%s(iov_base = %" PRId64 ", size = %zu )\n", __FUNCTION__, block + off, size);
+
+                #if CHECK_POINT
+                        record_memcpy_start();
+                #endif
+
+		//char *dummy;
+		//dummy = malloc(iov->iov_len);
+                //memcpy(dummy, iov->iov_base, iov->iov_len);
+                n_read_sz += iov->iov_len;
+                //free(dummy);
+
+                #if CHECK_POINT
+                        record_memcpy_stop();
+                #endif
+
 	return 0;
 }
 
@@ -3545,6 +3792,18 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 	Dprintf("%s(ino = %lu, off = %" PRId64 ", size = %zu)\n",
 	        __FUNCTION__, ino, off, size);
 
+	#if KEEP_STATS
+		inc_stat(READ);
+	#endif
+	
+	#if FLUSH_KCACHE
+		flush_kcache();
+	#endif
+	
+	#if CHECK_POINT
+		record_read_start();
+	#endif
+	
 	if (!inode)
 	{
 		r = -ENOENT;
@@ -3564,6 +3823,7 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 	first_blockoff = off / BPFS_BLOCK_SIZE;
 	last_blockoff = (off + size) ? (off + size - 1) / BPFS_BLOCK_SIZE : 0;
 	nblocks = last_blockoff - first_blockoff + 1;
+	Dprintf("%s() : nblocks = %ld\n",__func__, nblocks);
 	iov = calloc(nblocks, sizeof(*iov));
 	if (!iov)
 	{
@@ -3579,6 +3839,9 @@ static void fuse_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
 
 	bpfs_commit();
 	xcall(fuse_reply_iov(req, iov, nblocks));
+	#if CHECK_POINT
+		record_read_stop();
+	#endif
 	free(iov);
 	return;
 
@@ -3593,7 +3856,9 @@ static int callback_write(uint64_t blockoff, char *block,
                           void *buf, uint64_t *new_blockno)
 {
 	uint64_t buf_offset = blockoff * BPFS_BLOCK_SIZE + off - crawl_start;
+        Dprintf("%s(dest = %" PRId64 ", size = %zu )\n", __FUNCTION__, block + off, size);
 
+	//printf("valid = %u\n", valid);
 	assert(commit != COMMIT_NONE);
 	if (!(commit == COMMIT_FREE
 	      || (SCSP_OPT_APPEND && off >= valid)
@@ -3601,6 +3866,7 @@ static int callback_write(uint64_t blockoff, char *block,
 	          && (commit == COMMIT_ATOMIC
 	              && (can_atomic_write(off, size) || off >= valid)))))
 	{
+	//	printf("CoW\n");
 		uint64_t newno = cow_block(*new_blockno, off, size, valid);
 		if (newno == BPFS_BLOCKNO_INVALID)
 			return -ENOSPC;
@@ -3609,8 +3875,26 @@ static int callback_write(uint64_t blockoff, char *block,
 		block = get_block(newno);
 	}
 
-	// TODO: if can_atomic_write(), will memcpy() make just one write?
-	memcpy(block + off, buf + buf_offset, size);
+	#if CHECK_POINT
+		record_memcpy_start();	
+	#endif
+
+	if (can_atomic_write(off, size)) {
+		Dprintf("%s() : atomic_memcpy()\n", __func__);
+	//	epoch("callback_write 01");
+		atomic_memcpy(block + off, buf + buf_offset, size);
+	}
+	else{
+		Dprintf("%s() : memcpy()\n",__func__);
+	//`	epoch("callback_write 02");
+		memcpy(block + off, buf + buf_offset, size);
+		n_write_sz += size;
+	}
+
+	#if CHECK_POINT
+		record_memcpy_stop();	
+	#endif
+
 	if (SCSP_OPT_APPEND && off >= valid)
 		indirect_cow_block_direct(*new_blockno, off, size);
 
@@ -3638,7 +3922,7 @@ static int callback_set_mtime(char *block, unsigned off,
 	}
 #endif
 	inode = (struct bpfs_inode*) (block + off);
-
+	epoch("callback_set_mtime");
 	inode->mtime = *new_time;
 #if SCSP_OPT_TIME
 	indirect_cow_block_direct(new_blockno, block_offset(&inode->mtime),
@@ -3661,13 +3945,32 @@ static void fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 	Dprintf("%s(ino = %lu, off = %" PRId64 ", size = %zu)\n",
 	        __FUNCTION__, ino, off, size);
 
+	#if KEEP_STATS
+		inc_stat(WRITE);	
+	#endif
+	
+	#if FLUSH_KCACHE
+		flush_kcache();
+	#endif
+	
 	assert(get_inode(ino)->nlinks);
 
+	#if CHECK_POINT
+		record_write_start();
+	#endif
+
 	r = crawl_data(ino, off, size, COMMIT_ATOMIC, callback_write, buf_unconst);
+
+	#if CHECK_POINT
+		record_write_stop();
+	#endif
+
+	// epoch() ?
 	if (r >= 0)
 	{
 		struct bpfs_time time_now = BPFS_TIME_NOW();
 		r = crawl_inode(ino, COMMIT_ATOMIC, callback_set_mtime, &time_now);
+		// epoch() ?
 #if COMMIT_MODE == MODE_BPFS
 		assert(r >= 0);
 #endif
@@ -3676,11 +3979,13 @@ static void fuse_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
 	if (r < 0)
 	{
 		bpfs_abort();
+		// epoch() ?
 		xcall(fuse_reply_err(req, -r));
 	}
 	else
 	{
 		bpfs_commit();
+		// epoch() ?
 		xcall(fuse_reply_write(req, size));
 	}
 }
@@ -3733,17 +4038,17 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 
 	ADD_FUSE_CALLBACK(statfs);
 	ADD_FUSE_CALLBACK(lookup);
-//	ADD_FUSE_CALLBACK(forget);
+	ADD_FUSE_CALLBACK(forget);
 	ADD_FUSE_CALLBACK(getattr);
-	ADD_FUSE_CALLBACK(setattr);
+		ADD_FUSE_CALLBACK(setattr);
 	ADD_FUSE_CALLBACK(readlink);
-	ADD_FUSE_CALLBACK(mknod);
-	ADD_FUSE_CALLBACK(mkdir);
-	ADD_FUSE_CALLBACK(unlink);
-	ADD_FUSE_CALLBACK(rmdir);
-	ADD_FUSE_CALLBACK(symlink);
-	ADD_FUSE_CALLBACK(rename);
-	ADD_FUSE_CALLBACK(link);
+		ADD_FUSE_CALLBACK(mknod);
+		ADD_FUSE_CALLBACK(mkdir);
+		ADD_FUSE_CALLBACK(unlink);
+		ADD_FUSE_CALLBACK(rmdir);
+		ADD_FUSE_CALLBACK(symlink);
+		ADD_FUSE_CALLBACK(rename);
+		ADD_FUSE_CALLBACK(link);
 
 //	ADD_FUSE_CALLBACK(setxattr);
 //	ADD_FUSE_CALLBACK(getxattr);
@@ -3755,10 +4060,10 @@ static void init_fuse_ops(struct fuse_lowlevel_ops *fuse_ops)
 //	ADD_FUSE_CALLBACK(releasedir);
 	ADD_FUSE_CALLBACK(fsyncdir);
 
-	ADD_FUSE_CALLBACK(create);
+		ADD_FUSE_CALLBACK(create);
 	ADD_FUSE_CALLBACK(open);
 	ADD_FUSE_CALLBACK(read);
-	ADD_FUSE_CALLBACK(write);
+		ADD_FUSE_CALLBACK(write);
 //	ADD_FUSE_CALLBACK(flush);
 //	ADD_FUSE_CALLBACK(release);
 	ADD_FUSE_CALLBACK(fsync);
@@ -3786,7 +4091,7 @@ void random_fsck(int signo)
 	Dprintf("fsck passed\n");
 
 	memset(&itv, 0, sizeof(itv));
-	static_assert(RFSCK_MAX_INTERVAL <= RAND_MAX);
+	static_assert(RFSCK_MAX_INTERVAL <= RAND_MAX,"HOLA");
 	itv.it_value.tv_usec = rand() % RFSCK_MAX_INTERVAL;
 	xsyscall(setitimer(ITIMER_VIRTUAL, &itv, NULL));
 }
@@ -3809,7 +4114,9 @@ static void init_persistent_bpram(const char *filename)
 	bpram_size = stbuf.st_size;
 	xassert(bpram_size == stbuf.st_size);
 
-	bpram = mmap(NULL, bpram_size, PROT_READ | PROT_WRITE, MAP_SHARED, bpram_fd, 0);
+	bpram = mmap(NULL, bpram_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, bpram_fd, 0);
+	mlock(bpram, bpram_size);
+	//bpram = mmap(NULL, bpram_size, PROT_READ | PROT_WRITE, MAP_SHARED, bpram_fd, 0);
 	xassert(bpram);
 	// some code assumes block memory address are block aligned
 	xassert(!block_offset(bpram));
@@ -3817,6 +4124,7 @@ static void init_persistent_bpram(const char *filename)
 
 static void destroy_persistent_bpram(void)
 {
+	munlock(bpram, bpram_size);
 	xsyscall(msync(bpram, bpram_size, MS_SYNC));
 	xsyscall(munmap(bpram, bpram_size));
 	bpram = NULL;
@@ -3865,11 +4173,87 @@ void inform_pin_of_bpram(const char *bpram_addr, size_t size)
 	// This code exists to ensure that the compiler does not optimize
 	// away calls to this function. This syscall probably cannot be
 	// optimized away.
+	fprintf(stdout, "\n");
+	fprintf(stdout, "[BPFS] %s\n", __func__);
+	fprintf(stdout, "[BPFS] start : %llu, size : %llu bytes\n", (unsigned long long)bpram_addr, (unsigned long long)size);
+	fprintf(stdout, "[BPFS] end   : %llu\n", (unsigned long long)bpram_addr + (unsigned long long)size);
+	fprintf(stdout, "[BPFS] start : %p, size : %llu MB\n", (void *)bpram_addr, (unsigned long long)size/(1024*1024));
+	fprintf(stdout, "[BPFS] end   : %p\n", (void *)(bpram_addr + (unsigned long long)size));
+	fprintf(stdout, "\n");
+	fprintf(stdout, "[BPFS] epoch        : %p or %llu\n", (void *) &epoch_barrier, (unsigned long long) &epoch_barrier);
+	fprintf(stdout, "[BPFS] open_start   : %p or %llu\n", (void *) &fuse_open_start, (unsigned long long) &fuse_open_start);
+	fprintf(stdout, "[BPFS] read_start   : %p or %llu\n", (void *) &fuse_read_start, (unsigned long long) &fuse_read_start);
+	fprintf(stdout, "[BPFS] read_stop    : %p or %llu\n", (void *) &fuse_read_stop,  (unsigned long long) &fuse_read_stop);
+	fprintf(stdout, "[BPFS] write_start  : %p or %llu\n", (void *) &fuse_write_start, (unsigned long long) &fuse_write_start);
+	fprintf(stdout, "[BPFS] write_stop   : %p or %llu\n", (void *) &fuse_write_stop,  (unsigned long long) &fuse_write_stop);
+	fprintf(stdout, "[BPFS] memcpy_start : %p or %llu\n", (void *) &memcpy_start,  (unsigned long long) &memcpy_start);
+	fprintf(stdout, "[BPFS] memcpy_stop  : %p or %llu\n", (void *) &memcpy_stop,  (unsigned long long) &memcpy_stop);
+	fprintf(stdout, "\n");
+	fflush(stdout);
+
+
+	char *contact = bpram_addr, content;
+	int increment = 4096;
+	//FILE * fp = fopen("bpram_vmmap.txt", "w+");
+	FILE * fp = fopen("/dev/null", "w");
+	char str[128];
+	if ( fp )
+	{
+		fprintf(stdout, "Touching each page of VM backed by NVM...\n");
+		fflush(stdout);
+		mtrace_enable_set(mtrace_record_ascope, "btrace");
+		record_read_start();
+	
+		while ( contact < bpram_addr + size )
+		{
+			content =  *contact;
+			fprintf(fp, "%llu %llu %c \n", contact, contact+increment-1, content);
+			contact += increment;
+		}
+
+
+		record_read_stop();
+		mtrace_enable_set(mtrace_record_disable, "btrace");
+		fclose(fp);
+	}
+	else
+		fprintf(stdout, "Cannot touch each page of VM backed by NVM.\n");
+
+	fflush(stdout);
+	(void) getpid();
+}
+
+static void signal_inform_pin(int signo)
+{
+	inform_pin_of_bpram(bpram, bpram_size);
+}
+
+static void signal_reset_stats(int signo)
+{
+	fbnch_child = true;
+	print_stats();
+	reset_stats();
+	fflush(stdout);
 	(void) getpid();
 }
 
 int main(int argc, char **argv)
 {
+
+	#ifdef CONFIG_SIG_HANDLER
+		#include <signal.h>
+		if (signal(SIGUSR1, signal_inform_pin) == SIG_ERR){
+			fprintf(stderr, "Failed to attached signal handler for SIGUSR1.");	
+			assert(1==0);
+		}
+
+		if (signal(SIGUSR2, signal_reset_stats) == SIG_ERR){
+			fprintf(stderr, "Failed to attached signal handler for SIGUSR2.");	
+			assert(1==0);
+		}
+	#endif
+	open_kcache();
+
 	void (*destroy_bpram)(void);
 	int fargc;
 	char **fargv;
@@ -3925,17 +4309,20 @@ int main(int argc, char **argv)
 	}
 
 #if COMMIT_MODE == MODE_SP
+	// sanketh : not this one (correct)
 	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SP;
 	persistent_super = bpfs_super;
 	staged_super = *bpfs_super;
 	set_super(&staged_super);
 #else
+	// sanketh : this one (correct)
 	bpfs_super[1].commit_mode = bpfs_super->commit_mode = BPFS_COMMIT_SCSP;
 #endif
 
 	crawler_init();
 
 #if INDIRECT_COW
+	// sanketh : not this one (correct)
 	xcall(indirect_cow_init());
 #endif
 
@@ -3943,20 +4330,24 @@ int main(int argc, char **argv)
 
 #if COMMIT_MODE == MODE_BPFS
 	// NOTE: could instead clear and set this field for each system call
+	// sanketh : this one (correct)
 	bpfs_super[1].ephemeral_valid = bpfs_super->ephemeral_valid = 0;
 #endif
 
 # if COMMIT_MODE == MODE_SCSP
+	// sanketh : not this one (correct)
 	reset_indirect_cow_superblock();
 # endif
 
 	inform_pin_of_bpram(bpram, bpram_size);
 
 #if DETECT_NONCOW_WRITES_SCSP
+	// sanketh : not this one (correct)
 	xsyscall(mprotect(bpram, bpram_size, PROT_READ));
 #endif
 
 #if DETECT_STRAY_ACCESSES
+	// sanketh : not this one (correct)
 	xsyscall(mprotect(bpram, bpram_size, PROT_NONE));
 	{
 		uint64_t blockno;
@@ -3971,11 +4362,14 @@ int main(int argc, char **argv)
 	if (getenv("RFSCK"))
 	{
 #if BLOCK_POISON
+	// sanketh : not this one (correct)
 		printf("Not enabling random fsck: BLOCK_POISON is enabled.\n");
 #elif INDIRECT_COW
+	// sanketh : not this one
 		// There are periods when bpfs_super does not agree with the bitmaps
 		printf("Not enabling random fsck: INDIRECT_COW is enabled.\n");
 #else
+	// sanketh : this one (correct)
 		struct itimerval itv;
 
 		if (!strcmp(getenv("RFSCK"), ""))
@@ -3996,6 +4390,7 @@ int main(int argc, char **argv)
 	}
 
 #if BLOCK_POISON
+	// sanketh : not this one (correct)
 	printf("Block poisoning enabled. Write counting will be incorrect.\n");
 #endif
 
@@ -4005,6 +4400,7 @@ int main(int argc, char **argv)
 	argc -= 2;
 
 #if FUSE_BIG_WRITES
+	// sanketh : this one (from gcc -E)
 	{
 		const char *argv_str_end = argv[argc - 1] + strlen(argv[argc - 1]) + 1;
 		size_t argv_str_len = argv_str_end - argv[0];
@@ -4043,15 +4439,19 @@ int main(int argc, char **argv)
 
 		xcall(fuse_parse_cmdline(&fargs, &mountpoint, NULL, NULL));
 		xassert((ch = fuse_mount(mountpoint, &fargs)));
-
+//		printf("\nchk pt 1");
 		se = fuse_lowlevel_new(&fargs, &fuse_ops, sizeof(fuse_ops), NULL);
+//		printf("\nchk pt 2");
 		if (se)
 		{
 			if (fuse_set_signal_handlers(se) != -1)
 			{
 				fuse_session_add_chan(se, ch);
 
+//		printf("\nchk pt 3");
+//		printf("\n");
 				r = fuse_session_loop(se);
+//		printf("\nchk pt 4");
 
 				fuse_remove_signal_handlers(se);
 				fuse_session_remove_chan(ch);
@@ -4065,15 +4465,18 @@ int main(int argc, char **argv)
 	}
 
 #if FUSE_BIG_WRITES
+	// sanketh : this one (gcc -E)
 	free(fargv[0]);
 	free(fargv);
 #endif
 	fargv = NULL;
 
 #if COMMIT_MODE == MODE_BPFS
+	// sanketh : this one  (correct)
 	printf("CoW: %" PRIu64 " bytes in %" PRIu64 " blocks\n",
 	       cow_nbytes, cow_nblocks);
 #else
+	// sanketh : not this one (correct)
 	// MODE_SP: doesn't count superblock
 	// MODE_SCSP: current implementation can un-CoW
 	printf("CoW: -1 bytes in -1 blocks\n");
@@ -4082,6 +4485,7 @@ int main(int argc, char **argv)
 	dcache_destroy();
 	destroy_allocations();
 #if INDIRECT_COW
+	// sanketh : not this one (correct)
 	indirect_cow_destroy();
 #endif
 	destroy_bpram();

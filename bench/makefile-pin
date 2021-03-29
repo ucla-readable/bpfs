@@ -24,7 +24,7 @@
 #    Pin was installed. This can also be set on the command line,
 #    or as an environment variable.
 #
-PIN_HOME ?= pin
+PIN_HOME ?= /home/nalli/cache_cow/pin
 
 
 ##############################################################
@@ -45,10 +45,10 @@ ifdef OS
 endif
 
 ifeq ($(TARGET_COMPILER),gnu)
-    include $(PIN_HOME)/source/tools/makefile.gnu.config
+    #include $(PIN_HOME)/source/tools/makefile.gnu.config
     CXXFLAGS ?= -Wall -Werror -Wno-unknown-pragmas $(DBG) $(OPT)
 	CXXFLAGS += -std=c++0x # Disable for GCC <4.4
-    PIN=$(PIN_HOME)/pin
+    PIN=$(PIN_HOME)/pin.sh
 endif
 
 ifeq ($(TARGET_COMPILER),ms)
@@ -90,7 +90,7 @@ $(OBJDIR):
 	mkdir -p $(OBJDIR)
 
 $(OBJDIR)%.o : %.cpp
-	$(CXX) -c $(CXXFLAGS) $(PIN_CXXFLAGS) ${OUTOPT}$@ $<
+	$(CXX) -c $(CXXFLAGS) $(PIN_CXXFLAGS) -o $@ $<
 
 $(TOOLS): $(PIN_LIBNAMES)
 

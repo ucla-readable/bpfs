@@ -46,6 +46,9 @@
 	- SP mode would do this
 - can SCSP work with one crawl down and then back up?
 
+- after a crash, garbage collect file truncates that set the new file size
+  but did not decrease the height of the tree
+
 * unimplemented write optimizations
 - make truncate(expand) write fewer bytes by adding an inode field 'valid'
   where valid <= nbytes

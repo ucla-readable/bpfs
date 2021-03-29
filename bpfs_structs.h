@@ -75,13 +75,16 @@
 struct height_addr
 {
 	uint64_t height : BPFS_TREE_LOG_MAX_HEIGHT; // #levels of indir blocks
+	// 3 bits of height
 	uint64_t addr   : BPFS_TREE_LOG_ROOT_MAX_ADDR;
+	// 61 bits of addr - addr of the child ??
 };
 
 struct bpfs_tree_root
 {
+	// 16 bytes
 	struct height_addr ha; // valid iff !!nbytes
-	uint64_t nbytes;
+	uint64_t nbytes; // what is this ??
 };
 
 // bpfs_super.commit_mode options:
@@ -90,6 +93,7 @@ struct bpfs_tree_root
 
 struct bpfs_super
 {
+	// 4K super block
 	uint32_t magic;
 	uint32_t version;
 	uint8_t  uuid[16];
@@ -103,10 +107,14 @@ struct bpfs_super
 
 
 #define BPFS_BLOCKNOS_PER_INDIR (BPFS_BLOCK_SIZE / sizeof(uint64_t))
+// this is 512
 
 struct bpfs_indir_block
 {
+	// TODO: would 32b addresses help significantly?
 	uint64_t addr[BPFS_BLOCKNOS_PER_INDIR];
+	// 512 64-bit pointers per indir block
+	// size = 4K
 };
 
 
@@ -116,14 +124,16 @@ struct bpfs_time
 //	uint32_t ns;
 };
 
+// TODO: could shrink bpfs_inode from 128 to 64 bytes
 struct bpfs_inode
 {
+	// 128 bytes of inode
 	uint64_t generation;
 	uint32_t uid;
 	uint32_t gid;
 	uint32_t mode;
 	uint32_t nlinks; // valid at mount iff bpfs_super.ephemeral_valid
-	uint64_t flags;
+	uint64_t flags; // unused
 	struct bpfs_tree_root root;
 	struct bpfs_time atime;
 	struct bpfs_time ctime;
@@ -132,12 +142,15 @@ struct bpfs_inode
 };
 
 #define BPFS_INODES_PER_BLOCK (BPFS_BLOCK_SIZE / sizeof(struct bpfs_inode))
-
+// this is 4096 / 128 = 32; 32 inodes per block
 
 struct bpfs_dirent
 {
 	uint64_t ino;
 	uint16_t rec_len;
+	// TODO: Is 'file_type' helpful?
+	// - Increased locality (at the cost of slight dirent size increase)
+	// - Easier to use than looking up the inode? (weak reason)
 	uint8_t file_type;
 	uint8_t name_len;
 	char name[];

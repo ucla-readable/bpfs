@@ -1,0 +1,38 @@
+total 10486120
+-rwxr-xr-x 1 nalli nalli         686 Sep 25  2014 addr2func.sh
+drwxr-xr-x 2 nalli nalli        4096 Aug  7  2014 bench
+-rw-r--r-- 1 nalli nalli      114982 Dec 17 19:29 bpfs.c
+-rw-r--r-- 1 nalli nalli        3304 Dec 17 19:29 bpfs.h
+-rw-r--r-- 1 nalli nalli        5689 Aug  7  2014 bpfs_structs.h
+-rw-r--r-- 1 nalli nalli 10737418240 Nov 10 22:28 bpram.img
+-rw-r--r-- 1 nalli nalli       24894 Aug  7  2014 crawler.c
+-rw-r--r-- 1 nalli nalli        2567 Aug  7  2014 crawler.h
+-rw-r--r-- 1 nalli nalli        6600 Aug  7  2014 dcache.c
+-rw-r--r-- 1 nalli nalli        2249 Aug  7  2014 dcache.h
+-rw-r--r-- 1 nalli nalli         248 Aug  7  2014 fuse_limits
+-rw-r--r-- 1 nalli nalli       17987 Aug  7  2014 GPL
+-rw-r--r-- 1 nalli nalli       17365 Aug  7  2014 hash_map.c
+-rw-r--r-- 1 nalli nalli        5051 Aug  7  2014 hash_map.h
+-rw-r--r-- 1 nalli nalli       13629 Aug  7  2014 indirect_cow.c
+-rw-r--r-- 1 nalli nalli         910 Aug  7  2014 indirect_cow.h
+-rw-r--r-- 1 nalli nalli       26530 Aug  7  2014 LGPL
+-rw-r--r-- 1 nalli nalli         745 Aug  7  2014 LICENSE
+lrwxrwxrwx 1 nalli nalli          34 Aug  7  2014 log -> /home/nalli/nvmprog/cache_cow/log/
+-rw-r--r-- 1 nalli nalli        2310 Sep 25  2014 Makefile
+-rw-r--r-- 1 nalli nalli        4755 Aug  7  2014 mkbpfs.c
+-rw-r--r-- 1 nalli nalli         108 Aug  7  2014 mkbpfs.h
+-rw-r--r-- 1 nalli nalli        1092 Aug  7  2014 mkfs.bpfs.c
+-rw-r--r-- 1 nalli nalli       13295 Dec 17 19:29 mtrace-magic.h
+lrwxrwxrwx 1 nalli nalli          50 Aug  7  2014 pin -> /home/nalli/nvmprog/cache_cow/tools/src/pin/pin.sh
+-rw-r--r-- 1 nalli nalli         151 Aug  7  2014 pintool.log
+-rw-r--r-- 1 nalli nalli        2258 Aug  7  2014 pool.h
+-rw-r--r-- 1 nalli nalli         848 Aug  7  2014 pwrite.c
+-rw-r--r-- 1 nalli nalli         825 Aug  7  2014 README
+lrwxrwxrwx 1 nalli nalli          46 Aug  7  2014 run -> /home/nalli/nvmprog/cache_cow/tools/src/run.sh
+-rw-r--r-- 1 nalli nalli           0 Apr  2 16:08 shortcuts
+-rwxr-xr-x 1 nalli nalli         134 Aug  7  2014 test.sh
+-rw-r--r-- 1 nalli nalli        5126 Aug  7  2014 todo
+lrwxrwxrwx 1 nalli nalli          35 Aug  7  2014 trace -> /home/nalli/nvmprog/cache_cow/trace
+-rw-r--r-- 1 nalli nalli        2932 Aug  7  2014 util.h
+-rw-r--r-- 1 nalli nalli        3125 Aug  7  2014 vector.c
+-rw-r--r-- 1 nalli nalli        3327 Aug  7  2014 vector.h
