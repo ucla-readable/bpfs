@@ -492,16 +492,16 @@ class benchmarks:
                                   close_fds=True)
             devnull.close()
 
-    @benchmacro
-    class bonnie_sync:
-        free_space = 6 * 1024
-        def run(self):
-            cmd = ['bonnie++', '-d', self.mnt, '-r', '1024', '-b']
-            devnull = open('/dev/null', 'rw')
-            subprocess.check_call(cmd,
-                                  stdout=devnull, stderr=devnull,
-                                  close_fds=True)
-            devnull.close()
+#    @benchmacro
+#    class bonnie_sync:
+#        free_space = 6 * 1024
+#        def run(self):
+#            cmd = ['bonnie++', '-d', self.mnt, '-r', '1024', '-b']
+#            devnull = open('/dev/null', 'rw')
+#            subprocess.check_call(cmd,
+#                                  stdout=devnull, stderr=devnull,
+#                                  close_fds=True)
+#            devnull.close()
 
 
 class filesystem_bpfs:

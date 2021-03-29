@@ -539,6 +539,8 @@ static __inline hash_map_elt_t * hash_map_find_internal(const hash_map_t * hm, c
 
 void * hash_map_find_val(const hash_map_t * hm, const void * k)
 {
+        Dprintf("%s(%p, %p)\n", __FUNCTION__, hm, k);
+
 	hash_map_elt_t * hme = hash_map_find_internal(hm, k);
 	if (!hme)
 	{

@@ -1,13 +1,16 @@
+LD = ld
 CC = gcc
-CFLAGS = -Wall -g
+CFLAGS = -Wall 
 # Remove debug checks:
-#CFLAGS += -DNDEBUG
+CFLAGS += -DNDEBUG
 # Enable optimizations:
-#CFLAGS += -O3 -march=native # GCC >4.4: -flto
+CFLAGS += -O3 -march=native # GCC >4.4: -flto
 # Enable Nehalem optimizations (GCC 4.4 -march only knows up to Core2):
 #CFLAGS += -msahf -msse4 -msse4.1 -msse4.2
 # Enable gprof:
 #CFLAGS += -pg
+# Enable debugging symbols
+CFLAGS += -g
 
 .PHONY: all clean
 
@@ -23,6 +26,8 @@ NCSRCS = bench/bpramcount.cpp bench/microbench.py
 
 all: $(BIN) $(TAGS)
 
+love :
+	@echo "Not war"
 clean:
 	rm -f $(BIN) $(OBJS) $(TAGS)
 
@@ -35,7 +40,7 @@ TAGS: $(SRCS) $(NCSRCS)
 
 bpfs.o: bpfs.c bpfs_structs.h bpfs.h crawler.h indirect_cow.h \
 	mkbpfs.h dcache.h util.h hash_map.h
-	$(CC) $(CFLAGS) `pkg-config --cflags fuse` -c -o $@ $<
+	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 -I/usr/local/include/fuse -c -o $@ $<
 
 mkfs.bpfs.o: mkfs.bpfs.c mkbpfs.h util.h
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -59,8 +64,11 @@ vector.o: vector.c vector.h
 hash_map.o: hash_map.c hash_map.h vector.h pool.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-bpfs: bpfs.o crawler.o indirect_cow.o mkbpfs.o dcache.o hash_map.o vector.o
-	$(CC) $(CFLAGS) `pkg-config --libs fuse` -luuid -o $@ $^
+# Fucking gcc was throwing away the linker flags and the linker was throwing
+# a lot of "undefined references". Hence, I moved those linker flags in $^
+# Same for the rule mkfs.bpfs : ...
+bpfs: bpfs.o crawler.o indirect_cow.o mkbpfs.o dcache.o hash_map.o vector.o -lfuse -luuid -lpthread
+	$(CC) $(CCFLAGS) -o $@ $^
 
-mkfs.bpfs: mkfs.bpfs.o mkbpfs.o
-	$(CC) $(CFLAGS) -luuid -o $@ $^
+mkfs.bpfs: mkfs.bpfs.o mkbpfs.o -luuid
+	$(CC) $(CCFLAGS) -o $@ $^

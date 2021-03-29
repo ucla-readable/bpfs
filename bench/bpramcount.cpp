@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
-#include "pin.H"
+#include "/home/nalli/cache_cow/tools/pin/source/include/pin/pin.H"
 
 #if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 4)
 # include <unordered_map>

@@ -15,7 +15,7 @@
 
 
 // Fixed-size cache for now. Must be at least 2, for rename. 1024? Why not.
-#define NMDIRS_MAX 1024
+#define NMDIRS_MAX 10240
 
 struct mdirent_free
 {

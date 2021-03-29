@@ -20,9 +20,9 @@ BPFS can use a memory-mapped file/device or run in DRAM:
 - File/device:
   1. (File) Create the file. E.g., dd if=/dev/zero of=bpram.img bs=1M count=$N
   2. Format the file system: ./mkfs.bpfs bpram.img
-  3. Mount the file system: ./bpfs -f bpram.mnt $MNT
+  3. Mount the file system: ./bpfs -f bpram.img /tmp/bpfs
 - DRAM (no need to create a file and contents are lost at exit):
-  1. ./bpfs -s $((N * 1024 * 1024)) $MNT
+  1. ./bpfs -s $((N * 1024 * 1024)) /tmp/bpfs
 
 There are several configuration macros at the top of bpfs.h and bpfs.c.
 
